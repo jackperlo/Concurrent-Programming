@@ -1,8 +1,8 @@
 # Master
 
 ## Parametri di Compilazione:
-- **SO_WIDTH**
-- **SO_HEIGHT**
+- SO_WIDTH
+- SO_HEIGHT
 
 ## Parametri di Esecuzione:
 ```c
@@ -13,6 +13,8 @@ int SO_HOLES
 -|-|-
 ⬜|⬜|⬜
 ⬜|⬛|⬜
+
+***
 
 ```c
 int SO_SOURCES
@@ -25,39 +27,56 @@ Identificano le celle(che non sono *INVALIDE*) da cui possono arrivare una o pi�
 > - [x] Permette di selezionare i messaggi per "**TIPO**" (senza doverli per forza leggere in sequenza)
 > - [x] I messaggi sono *DELIMITATI* e non stream di byte privi di delimitazioni interne
 
+***
+
 ```c
 int SO_TAXI
 //numero di taxi presenti, un taxi può eseguire un'altra richiesta dopo averne terminata una
 ```
+
+***
 
 ```c
 int SO_CAP_MIN
 //minimo assumibile dal numero massimo di taxi che possono essere presenti in una cella contemporaneamente
 ```
 
+***
+
 ```c
 int SO_CAP_MAX
 //massimo assumibile dal numero massimo di taxi che possono essere presenti in una cella contemporaneamente
 ```
 
+***
+
 ```c
-SO_CAP -> rand(SO_CAP_MIN, SO_CAP_MAX)
+int SO_CAP = rand(SO_CAP_MIN, SO_CAP_MAX)
 //capacità (in numero di taxi) assumibile da una cella di "tipo" SO_SOURCES
 ```
-  
-### SO_TIMENSEC_MIN
 
-> tempo minimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
+***
 
-### SO_TIMENSEC_MAX
-
-> tempo massimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
-    
 ```c
---> SO_TIMENSEC -> rand(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX)
+int SO_TIMENSEC_MIN
+//tempo minimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
+```
+
+***
+
+```c
+int SO_TIMENSEC_MAX
+//tempo massimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
+```
+
+***
+
+```c
+int SO_TIMENSEC = rand(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX)
 //tempo che impiegherà il taxi ad attraversare la prossima cella 
 ```
 
+***
 
 #### sono da passare come parametri o da decidere arbitrariamente nel codice del progetto?
 
