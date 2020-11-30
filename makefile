@@ -5,7 +5,7 @@ all: Taxi.o Source.o Master.o
 	gcc -o all Taxi.o Source.o Master.o
 
 Master.o: Master.c Source.h Taxi.h
-	gcc -c $(COMPILATION_FLAGS) -D SO_WIDTH=4 -D SO_HEIGHT=4 Master.c
+	gcc -c $(COMPILATION_FLAGS) -D SO_WIDTH=8 -D SO_HEIGHT=8 Master.c
 Taxi.o: Taxi.c Taxi.h
 	gcc -c $(COMPILATION_FLAGS) Taxi.c
 Source.o: Source.c Source.h
@@ -17,4 +17,5 @@ clean:
 	rm –f *.o
 #make run: lancia l'eseguibile creato dalla compilazione
 run:
-	./all	
+	./all 5 1
+#parametri d'esecuzione: SO_HOLES, SO_SOURCES

@@ -9,7 +9,7 @@
 ## Parametri di Esecuzione:
 ```c
 int SO_HOLES
-//definito algoritmicamente dopo la creazione della matrice
+//definito algoritmicamente dopo la creazione della matrice <--NO!!!! PASSATO COME PARAMETRO DI ESECUZIONE
 ```
 ⬛|⬜|⬛
 -|-|-
