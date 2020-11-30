@@ -1,8 +1,9 @@
 Master:
+
     Parametri di Compilazione:
         - SO_WIDTH
         - SO_HEIGHT
-
+        
     Parametri di Esecuzione:
         - SO_HOLES -> definito algoritmicamente dopo la creazione della matrice
                         v | x | v
@@ -87,11 +88,13 @@ Master:
                 
                 */
         DEVE passare durante il fork del nuovo processo source, anche la coppia [riga][col] associata al processo appena forkato source
-
+        
 Taxi:
+
     METODI:
         - void taxi_exec(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
         //gestisce l'esecuzione dei PROCESSI TAXI
 Source:
+
     METODI:
         - void source_exec(int x, int y, int* mappa[][])
