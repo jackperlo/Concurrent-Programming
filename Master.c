@@ -3,12 +3,14 @@
 #include "Source.h"
 #include "Taxi.h"
 
-/*-------------DEFINE COSTANTI--------------*/
+/*-------------CONTROLLO DEFINE--------------*/
+#ifndef SO_HEIGHT
+#define SO_HEIGHT 10 /* indica l'altezza della matrice che rappresenta la mappa, se non è definito imposto un valore arbitrario di 10 */
+#endif
 
-/* ATTENZIONE: Valori arbitrari da rimuovere */
-
-#define SO_WIDTH 4 /* indica la larghezza della matrice che rappresenta la mappa */
-#define SO_HEIGHT 4 /* indica l'altezza della matrice che rappresenta la mappa */
+#ifndef SO_WIDTH
+#define SO_WIDTH 10 /* indica la larghezza della matrice che rappresenta la mappa, se non è definito imposto un valore arbitrario di 10 */
+#endif
 
 
 void map_generator(int map[SO_HEIGHT][SO_WIDTH], int SO_HOLES, int SO_SOURCES); 
