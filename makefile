@@ -5,7 +5,7 @@ all: Taxi.o Source.o Master.o
 	gcc -o all Taxi.o Source.o Master.o
 
 Master.o: Master.c Source.h Taxi.h
-	gcc -c $(COMPILATION_FLAGS) Master.c
+	gcc -c $(COMPILATION_FLAGS) -D SO_WIDTH=4 -D SO_HEIGHT=4 Master.c
 Taxi.o: Taxi.c Taxi.h
 	gcc -c $(COMPILATION_FLAGS) Taxi.c
 Source.o: Source.c Source.h
