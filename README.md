@@ -34,42 +34,30 @@ int SO_TAXI
 //numero di taxi presenti, un taxi può eseguire un'altra richiesta dopo averne terminata una
 ```
 
-***
-
 ```c
 int SO_CAP_MIN
 //minimo assumibile dal numero massimo di taxi che possono essere presenti in una cella contemporaneamente
 ```
-
-***
 
 ```c
 int SO_CAP_MAX
 //massimo assumibile dal numero massimo di taxi che possono essere presenti in una cella contemporaneamente
 ```
 
-***
-
 ```c
 int SO_CAP = rand(SO_CAP_MIN, SO_CAP_MAX)
 //capacità (in numero di taxi) assumibile da una cella di "tipo" SO_SOURCES
 ```
-
-***
 
 ```c
 int SO_TIMENSEC_MIN
 //tempo minimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
 ```
 
-***
-
 ```c
 int SO_TIMENSEC_MAX
 //tempo massimo per l'attraversamento di una cella (che non siano INACCESSIBILI)
 ```
-
-***
 
 ```c
 int SO_TIMENSEC = rand(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX)
