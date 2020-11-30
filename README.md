@@ -1,8 +1,10 @@
 # Master
 
 ## Parametri di Compilazione:
-- SO_WIDTH
-- SO_HEIGHT
+```c
+#define SO_WIDTH
+#define SO_HEIGHT
+```
 
 ## Parametri di Esecuzione:
 ```c
@@ -66,7 +68,7 @@ int SO_TIMENSEC = rand(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX)
 
 ***
 
-#### sono da passare come parametri o da decidere arbitrariamente nel codice del progetto?
+> ~~sono da passare come parametri o da decidere arbitrariamente nel codice del progetto?~~
 
 ```c
 int SO_TIMEOUT
@@ -83,7 +85,7 @@ int SO_DURATION
 int SO_TOP_CELLS
 //numero di celle da stampare tra le più attraversate
 ```
-> quante restituirne (visto che sono "LE CELLE") in ordine decrescente?
+> ~~quante restituirne (visto che sono "LE CELLE") in ordine decrescente?~~ SO_TOP_CELLS è un numero che indica quante stamparne
 
 ```c
 int SO_TOP_ROAD
@@ -124,11 +126,11 @@ void init();
 //inizializzazione delle variabili ecc
 ```
 ```c
-void map_generator(int* mappa[][], SO_HOLES, SO_SOURCES); 
+void map_generator(int mappa[SO_HEIGHT][SO_WIDTH], SO_HOLES, SO_SOURCES); 
 //genera la matrice con annesse celle HOLES e celle SO_SOURCES
 ```
 ```c
-void print_map(int* mappa[][], int isTerminal);
+void print_map(int mappa[SO_HEIGHT][SO_WIDTH], int isTerminal);
 //stampa generale dalla mappa, se isTerminal == 1 stampo la mappa con evidenziate SOURCES e SO_TOP_CELLS
 //chiedere se una cella SOURCE può essere una TOP_CELL 
 ```
@@ -137,18 +139,19 @@ void taxi_generator(SO_TAXI, SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
 //fa le fork per ogni taxi da creare e gestisce la loro inizializzazione, chiama taxi_exec(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
 ```
 ```c
-void source_generator(int* mappa[][], SO_SOURCES)
-//genera i processi source associando ad ognuno una cella SOURCE, 
-        /*
-        e genera il mapping Processo->matriceDellaMappa
-                0 1 2 ... nProcessiSource
-        Riga    0|3|1|2|
-        Colonna 1|4|3|2|
-        dove Riga e Colonna si riferiscono agli indici della matrice di interi che contiene la mappa
-
-        */
-//DEVE passare durante il fork del nuovo processo source, anche la coppia [riga][col] associata al processo appena forkato source
+void source_generator(int mappa[SO_HEIGHT][SO_WIDTH], SO_SOURCES)
+//genera i processi source associando ad ognuno una cella SOURCE, DEVE passare durante il fork del nuovo processo source, anche la coppia [riga][col] associata al processo appena forkato source
 ```
+
+> ~~e genera il mapping Processo->matriceDellaMappa~~
+
+0|1|2|...|nProcessiSource
+-|-|-|---|---------------
+0|3|1|...|RigaDellaMappa
+1|4|3|...|ColonnaDellaMappa
+
+> ~~dove Riga e Colonna si riferiscono agli indici della matrice di interi che contiene la mappa~~
+
 # TAXI
 
 ## METODI
@@ -163,5 +166,5 @@ void taxi_exec(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
 ## METODI
 
 ```c
-void source_exec(int x, int y, int* mappa[][]);
+void source_exec(int x, int y, int mappa[SO_HEIGHT][SO_WIDTH]);
 ```
