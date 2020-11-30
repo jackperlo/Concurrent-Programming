@@ -118,20 +118,25 @@ int SO_TRIP_ABORTED
 ## METODI
 ```c
 int main();
-
+```
+```c
 void init(); 
 //inizializzazione delle variabili ecc
-
+```
+```c
 void map_generator(int* mappa[][], SO_HOLES, SO_SOURCES); 
 //genera la matrice con annesse celle HOLES e celle SO_SOURCES
-
+```
+```c
 void print_map(int* mappa[][], int isTerminal);
 //stampa generale dalla mappa, se isTerminal == 1 stampo la mappa con evidenziate SOURCES e SO_TOP_CELLS
 //chiedere se una cella SOURCE può essere una TOP_CELL 
-
+```
+```c
 void taxi_generator(SO_TAXI, SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
 //fa le fork per ogni taxi da creare e gestisce la loro inizializzazione, chiama taxi_exec(SO_TIMENSEC_MIN, SO_TIMENSEC_MAX, SO_TIMEOUT);
-
+```
+```c
 void source_generator(int* mappa[][], SO_SOURCES)
 //genera i processi source associando ad ognuno una cella SOURCE, 
         /*
