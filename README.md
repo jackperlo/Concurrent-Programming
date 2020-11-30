@@ -81,7 +81,7 @@ int SO_DURATION
 
 ```c
 int SO_TOP_CELLS
-//celle più attraversate
+//numero di celle da stampare tra le più attraversate
 ```
 > quante restituirne (visto che sono "LE CELLE") in ordine decrescente?
 
