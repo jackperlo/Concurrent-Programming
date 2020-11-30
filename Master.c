@@ -3,15 +3,25 @@
 #include "Source.h"
 #include "Taxi.h"
 
+/*-------------DEFINE COSTANTI--------------*/
 
-void map_generator(int **mappa, int SO_HOLES, int SO_SOURCES); 
+/* ATTENZIONE: Valori arbitrari da rimuovere */
+
+#define SO_WIDTH 4 /* indica la larghezza della matrice che rappresenta la mappa */
+#define SO_HEIGHT 4 /* indica l'altezza della matrice che rappresenta la mappa */
+
+
+void map_generator(int map[SO_HEIGHT][SO_WIDTH], int SO_HOLES, int SO_SOURCES); 
 /*
     genera la matrice con annesse celle HOLES e celle SO_SOURCES
 */
 
+void print_map(int map[SO_HEIGHT][SO_WIDTH], int isTerminal);
+/*
+    stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio
+*/
+
 /*-------------COSTANTI GLOBALI-------------*/
-const int SO_WIDTH; /* indica la larghezza della matrice che rappresenta la mappa */
-const int SO_HEIGHT; /* indica l'altezza della matrice che rappresenta la mappa */
 const int SO_HOLES; /* indica il numero di celle inaccessibili(da cui holes) all'interno della matrice */ 
 const int SO_SOURCES; /* indica il numero di celle sorgenti di possibili richieste. Come fossero le stazioni di servizio per i taxi */
 const int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -32,10 +42,49 @@ int SO_TRIP_NOT_COMPLETED; /* numero di viaggi ancora da eseguire o in itinere n
 int SO_TRIP_ABORTED; /* numero di viaggi abortiti a causa del deadlock */
 
 int main(int argc, char *argv[]){
+
+    /* TEST DI PRINT_MAP */
+    int map[SO_HEIGHT][SO_WIDTH] = {{1,2,3,0},{0,1,1,1},{2,1,1,0},{1,2,1,0}}; /* Mappa di TEST da RIMUOVERE */
+    print_map(map, 0);
     
     return 0;
 }
 
-void map_generator(int **mappa, int SO_HOLES, int SO_SOURCES){
+void map_generator(int map[SO_HEIGHT][SO_WIDTH], int SO_HOLES, int SO_SOURCES){
 
+}
+
+void print_map(int map[SO_HEIGHT][SO_WIDTH], int isTerminal){
+    /* indici per ciclare */
+    int i, k;
+
+    /* cicla per tutti gli elementi della mappa */
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(k = 0; k < SO_WIDTH; k++){
+            switch (map[i][k])
+            {
+            /* CASO 0: cella invalida, quadratino nero */
+            case 0:
+                printf("□");
+                break;
+            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
+            case 1:
+                printf("■");
+                break;
+            /* CASO 2: cella sorgente, quadratino striato */
+            case 2:
+                printf("▨");
+                break;
+            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
+            default:
+                if(isTerminal)
+                    printf("▣");
+                else
+                    printf("E");
+                break;
+            }
+        }
+        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
+        printf("\n");
+    }
 }
