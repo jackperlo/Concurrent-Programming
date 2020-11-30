@@ -71,9 +71,12 @@ void print_map(int map[SO_HEIGHT][SO_WIDTH], int isTerminal){
             case 1:
                 printf("■");
                 break;
-            /* CASO 2: cella sorgente, quadratino striato */
+            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
-                printf("▨");
+                if(isTerminal)
+                    printf("▨");
+                else
+                    printf("■");
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
