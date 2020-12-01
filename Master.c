@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "Source.h"
@@ -19,13 +20,14 @@ void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SO
 void init_map(); /* inizializza la matrice vergine (tutte le celle a 1)*/
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
+void init(); /* inizializzazione delle variabili */
 
 /*-------------COSTANTI GLOBALI-------------*/
-const int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
-const int SO_CAP_MIN; /* capacità minima assumibile da SO_CAP: determina il minimo numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
-const int SO_CAP_MAX; /* capacità massima assumibile da SO_CAP: determina il MASSIMO numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
-const int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
-const int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
+int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
+int SO_CAP_MIN; /* capacità minima assumibile da SO_CAP: determina il minimo numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
+int SO_CAP_MAX; /* capacità massima assumibile da SO_CAP: determina il MASSIMO numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
+int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
+int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 
 /*-------------VARIABILI GLOBALI-------------*/
 int map[SO_HEIGHT][SO_WIDTH]; /* matrice che determina la mappa in esecuzione */
@@ -43,12 +45,14 @@ int SO_TRIP_SUCCESS; /* numero di viaggi eseguiti con successo, da stampare a fi
 int SO_TRIP_NOT_COMPLETED; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
 int SO_TRIP_ABORTED; /* numero di viaggi abortiti a causa del deadlock */
 
+int SO_CAP[SO_HEIGHT][SO_WIDTH]; /* matrice di capacità massima per ogni cella */
+int SO_TIMENSEC[SO_HEIGHT][SO_WIDTH]; /* matrice dei tempi di attesa per ogni cella */
+
 int main(int argc, char *argv[]){
-    SO_HOLES = atoi(argv[1]); /* assumo che il primo parametro del main sia il numero di holes */
-    SO_SOURCES = atoi(argv[2]); /* secondo parametro del main -> numero di sorgenti nella mappa */
+    init();
 
     map_generator();
-    print_map(0);
+    print_map(1);
     
     return 0;
 }
@@ -141,29 +145,81 @@ void print_map(int isTerminal){
             {
             /* CASO 0: cella invalida, quadratino nero */
             case 0:
-                printf("□");
+                printf("|X");
                 break;
             /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
             case 1:
-                printf("■");
+                printf("|_");
                 break;
             /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
                 if(isTerminal)
-                    printf("▨");
+                    printf("|Z");
                 else
-                    printf("■");
+                    printf("|_");
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
                 if(isTerminal)
-                    printf("▣");
+                    printf("|L");
                 else
                     printf("E");
                 break;
             }
         }
         /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("\n");
+        printf("|\n");
     }
+}
+
+void init(){
+    FILE * settings ;
+    char title[100];
+    int option;
+
+    int i, j;
+
+    /* inizializzo il random */
+    srand(time(NULL));
+
+    /* carico il file settings */
+    settings = fopen("settings" , "r");
+
+    /* leggo ogni riga del file finche non raggiunge la fine EOF */
+    while(fscanf(settings, "%s = %d\n", title, &option) != EOF){
+
+        /* controllo la variabile da assegnare e imposto il suo valore */
+        if(strcmp(title, "SO_HOLES") == 0){
+            SO_HOLES = option;
+        }else if(strcmp(title, "SO_SOURCES") == 0){
+            SO_SOURCES = option;
+        }else if(strcmp(title, "SO_TAXI") == 0){
+            SO_TAXI = option;
+        }else if(strcmp(title, "SO_CAP_MIN") == 0){
+            SO_CAP_MIN = option;
+        }else if(strcmp(title, "SO_CAP_MAX") == 0){
+            SO_CAP_MAX = option;
+        }else if(strcmp(title, "SO_TIMENSEC_MIN") == 0){
+            SO_TIMENSEC_MIN = option;
+        }else if(strcmp(title, "SO_TIMENSEC_MAX") == 0){
+            SO_TIMENSEC_MAX = option;
+        }else if(strcmp(title, "SO_TIMEOUT") == 0){
+            SO_TIMEOUT = option;
+        }else if(strcmp(title, "SO_DURATION") == 0){
+            SO_DURATION = option;
+        }
+    }
+
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(j = 0; j < SO_WIDTH; j++){
+            /* genera la matrice delle capacità per ogni cella, genera un valore casuale tra CAP_MIN e CAP_MAX */
+            SO_CAP[i][j] = SO_CAP_MIN + rand() % (SO_CAP_MAX - (SO_CAP_MIN - 1));
+
+            /* genera la matrice dei tempi di attesa per ogni cella, genera un valore casuale tra TIMENSEC_MIN e TIMENSEC_MAX */
+            SO_TIMENSEC[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
+        }
+    }
+
+    /* chiude il file settings */
+    fclose(settings);
 }

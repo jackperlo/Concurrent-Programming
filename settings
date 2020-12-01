@@ -1,0 +1,10 @@
+//mantenere lo spazio a destra e a sinistra di '='
+SO_HOLES = 4
+SO_SOURCES = 3
+SO_TAXI = 1
+SO_CAP_MIN = 1
+SO_CAP_MAX = 3
+SO_TIMENSEC_MIN = 1
+SO_TIMENSEC_MAX = 5
+SO_TIMEOUT = 20
+SO_DURATION = 30
