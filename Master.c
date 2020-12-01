@@ -2,8 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <errno.h>
 
-#include "Source.h"
 #include "Taxi.h"
 
 /*-------------DEFINE di COSTANTI--------------*/
@@ -18,9 +19,12 @@
 /*------------DICHIARAZIONE METODI------------*/
 void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SOURCES */
 void init_map(); /* inizializza la matrice vergine (tutte le celle a 1)*/
+void assign_holes_cells(); /* metodo di supporto a map_generator(), assegna le celle invalide */
+void assign_source_cells(); /* metodo di supporto a map_generator(), assegna le celle sorgenti */
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void init(); /* inizializzazione delle variabili */
+void source_processes_generator(); /* fork dei processi sorgenti */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -48,21 +52,29 @@ int SO_TRIP_ABORTED; /* numero di viaggi abortiti a causa del deadlock */
 int SO_CAP[SO_HEIGHT][SO_WIDTH]; /* matrice di capacità massima per ogni cella */
 int SO_TIMENSEC[SO_HEIGHT][SO_WIDTH]; /* matrice dei tempi di attesa per ogni cella */
 
+pid_t SO_SOURCES_PID[SO_HEIGHT][SO_WIDTH];
+
 int main(int argc, char *argv[]){
+
     init();
 
     map_generator();
     print_map(1);
-    
+    source_processes_generator();
+
     return 0;
 }
 
 void map_generator(){
-    int i, x, y;
-    int esito=0; /* valore restituito dalla check_cell_2be_inaccessible(): 0 -> cella non adatta ad essere inaccessibile per vincoli di progetto. 1 -> cella adatta ad essere inaccessibile */
-    
     init_map();
-    srand(time(NULL)); /* inizializzo il random number generator */
+    assign_holes_cells();
+    assign_source_cells();
+}
+
+void assign_holes_cells(){
+    int i, x, y, esito=0; /* valore restituito dalla check_cell_2be_inaccessible(): 0 -> cella non adatta ad essere inaccessibile per vincoli di progetto. 1 -> cella adatta ad essere inaccessibile */
+    srand(time(NULL)); /* inizializzo il random number generator */ 
+
     for (i = 0; i < SO_HOLES; i++){
         do{
             x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
@@ -72,6 +84,20 @@ void map_generator(){
         }while(esito == 0); /* finché non trovo una cella adatta ad essere definita inaccessibile */
         map[x][y] = 0; /* rendo effettivamente la cella inaccessibile */
         esito = 0; 
+    }
+}
+
+void assign_source_cells(){
+    int i, x, y;
+    srand(time(NULL)); /* inizializzo il random number generator */ 
+    
+    for (i = 0; i < SO_SOURCES; i++){
+        do{
+            x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
+            y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */
+            if(map[x][y] != 0) /* se la cella non è inaccessibile */
+                map[x][y] = 2; /* assegno la cella come SOURCE */
+        }while(map[x][y] != 2); /* finché la cella che sto considerando non viene marcata come sorgente */
     }
 }
 
@@ -222,4 +248,50 @@ void init(){
 
     /* chiude il file settings */
     fclose(settings);
+}
+
+void source_processes_generator(){
+    int x,y;
+   /*char *args[4];*/
+   char* args[] = {
+    "Source",
+		"12", 
+		"14",
+		NULL
+	};
+    for (x = 0; x < SO_HEIGHT; x++){
+        for (y = 0; y < SO_WIDTH; y++){
+            if(map[x][y] == 2){
+                switch(SO_SOURCES_PID[x][y] = fork()){
+                    case -1:
+                        /* errore nella fork */
+                        fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
+                        exit(EXIT_FAILURE);
+                        break;
+                    
+                    /* caso PROCESSO FIGLIO */ 
+                    case 0:
+                        dprintf(1, "\nFIGLIO: %d",getpid());
+                        /**args[0] = *"Source";*/
+                        /*args[1] = (char)x;
+                        *args[2] = (char)y;*/
+                        
+                        /*args[3] = NULL;*/
+                        dprintf(1, "\nSource");
+                        execve("./Source",args,NULL);
+
+                         /* ERRORE ESECUZIONE DELLA EXECVE */
+                        fprintf(stderr, "\n%s: %d. EXECVE Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+	                    exit(EXIT_FAILURE);
+                        break;
+                    
+                    /* caso PROCESSO PADRE */
+                    default:
+                        printf("\nCiao sono il padre");
+                        break;
+                }
+                
+            }
+        }
+    }
 }
