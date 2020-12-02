@@ -1,30 +1,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysinfo.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
 
-#include "Taxi.h"
-
 /*-------------DEFINE di COSTANTI--------------*/
-#ifndef SO_HEIGHT
-#define SO_HEIGHT 10 /* indica l'altezza della matrice che rappresenta la mappa, se non è definito imposto un valore arbitrario di 10 */
-#endif
-
-#ifndef SO_WIDTH
-#define SO_WIDTH 10 /* indica la larghezza della matrice che rappresenta la mappa, se non è definito imposto un valore arbitrario di 10 */
-#endif
+/* file eseguibili da cui i figli del master assorbiranno il codice */
+#define TAXI "./Taxi"
+#define SOURCE "./Source"  
+/* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
+#define SETTING_PATH "settings"
+#define NUM_PARAM 9
 
 /*------------DICHIARAZIONE METODI------------*/
+void init(); /* inizializzazione delle variabili */
 void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SOURCES */
 void init_map(); /* inizializza la matrice vergine (tutte le celle a 1)*/
 void assign_holes_cells(); /* metodo di supporto a map_generator(), assegna le celle invalide */
 void assign_source_cells(); /* metodo di supporto a map_generator(), assegna le celle sorgenti */
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
-void init(); /* inizializzazione delle variabili */
 void source_processes_generator(); /* fork dei processi sorgenti */
+void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -34,35 +34,138 @@ int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta 
 int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 
 /*-------------VARIABILI GLOBALI-------------*/
-int map[SO_HEIGHT][SO_WIDTH]; /* matrice che determina la mappa in esecuzione */
+int SO_HEIGHT, SO_WIDTH;
+int **map; /* puntatore a matrice che determina la mappa in esecuzione */
+int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
+int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
+pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
 
-int SO_HOLES; /* indica il numero di celle inaccessibili(da cui holes) all'interno della matrice */ 
-int SO_SOURCES; /* indica il numero di celle sorgenti di possibili richieste. Come fossero le stazioni di servizio per i taxi */
+/* funzioni e struttura dati per lettura e gestione parametri su file */
+typedef struct node {
+	int value;
+	char name[20];
+	struct node * next;  
+} node;
+typedef node* param_list; /* conterrà la lista dei parametri passati tramite file di settings */
+param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
+param_list insert_exec_param_into_list(char name[], int value); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
+void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
+int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
+void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 
-int SO_TIMEOUT; /* numero di secondi dopo i quali il processo viene abortito */
-int SO_DURATION; /* durata dell'esecuzione in secondi */
-int SO_TOP_CELLS; /* numero di celle più attraversate (es. 4 -> riferisco le prime 4 più attraversate) */
-int SO_TOP_ROAD; /* processo che ha fatto più strada */
-int SO_TOP_LENGTH; /* processo che ha impiegato più tempo in un viaggio */
-int SO_TOP_REQ; /* processo che ha completato più request di clienti */ 
-int SO_TRIP_SUCCESS; /* numero di viaggi eseguiti con successo, da stampare a fine dell'esecuzione */
-int SO_TRIP_NOT_COMPLETED; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
-int SO_TRIP_ABORTED; /* numero di viaggi abortiti a causa del deadlock */
-
-int SO_CAP[SO_HEIGHT][SO_WIDTH]; /* matrice di capacità massima per ogni cella */
-int SO_TIMENSEC[SO_HEIGHT][SO_WIDTH]; /* matrice dei tempi di attesa per ogni cella */
-
-pid_t SO_SOURCES_PID[SO_HEIGHT][SO_WIDTH];
+/*
+-------------elenco dei parametri d'esecuzione e loro descrizione------------------
+int SO_HOLES;  indica il numero di celle inaccessibili(da cui holes) all'interno della matrice
+int SO_SOURCES;  indica il numero di celle sorgenti di possibili richieste. Come fossero le stazioni di servizio per i taxi 
+int SO_TIMEOUT;  numero di secondi dopo i quali il processo viene abortito 
+int SO_DURATION;  durata dell'esecuzione in secondi 
+int SO_TOP_CELLS;  numero di celle più attraversate (es. 4 -> riferisco le prime 4 più attraversate) 
+int SO_TOP_ROAD;  processo che ha fatto più strada 
+int SO_TOP_LENGTH;  processo che ha impiegato più tempo in un viaggio 
+int SO_TOP_REQ;  processo che ha completato più request di clienti 
+int SO_TRIP_SUCCESS;  numero di viaggi eseguiti con successo, da stampare a fine dell'esecuzione 
+int SO_TRIP_NOT_COMPLETED;  numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione 
+int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock 
+*/
 
 int main(int argc, char *argv[]){
+    char *s;
+    
+    /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
+    s = getenv("SO_HEIGHT");
+    SO_HEIGHT = atoi(s);
+    s = getenv("SO_WIDTH");
+    SO_WIDTH = atoi(s);
+    if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
+        fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
+		exit(EXIT_FAILURE);
+    }
 
     init();
-
     map_generator();
-    print_map(1);
+    print_map(0);
     source_processes_generator();
-
+    
+    free_param_list(listaParametri);
+    free_mat();
     return 0;
+}
+
+void init(){
+    int i, j;
+    FILE *settings;
+    /* conterranno nome e valore di ogni parametro definito in settings */
+    char name[100];
+    int value;
+    
+    /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
+    map = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (map == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        map[i] = malloc(SO_WIDTH*sizeof(int));
+        if (map[i] == NULL)
+        return;
+    }
+
+    SO_CAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (SO_CAP == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        SO_CAP[i] = malloc(SO_WIDTH*sizeof(int));
+        if (SO_CAP[i] == NULL)
+        return;
+    }
+
+    SO_TIMENSEC = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (SO_TIMENSEC == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        SO_TIMENSEC[i] = malloc(SO_WIDTH*sizeof(int));
+        if (SO_TIMENSEC[i] == NULL)
+        return;
+    }
+
+    SO_SOURCES_PID = (pid_t **)malloc(SO_HEIGHT*sizeof(pid_t *));
+    if (SO_SOURCES_PID == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        SO_SOURCES_PID[i] = malloc(SO_WIDTH*sizeof(pid_t));
+        if (SO_SOURCES_PID[i] == NULL)
+        return;
+    }
+
+
+    /*-----------LEGGO I PARAMETRI DI ESECUZIONE-------------*/
+    /* inizializzo il random */
+    srand(time(NULL));
+    /* apro il file settings */
+    if((settings = fopen(SETTING_PATH , "r")) == NULL){
+        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
+		exit(EXIT_FAILURE);
+    }
+    for(i=0; i<NUM_PARAM; i++){
+        /* leggo ogni riga del file finché non raggiunge la fine EOF */
+        while(fscanf(settings, "%s = %d\n", name, &value) != EOF)
+            listaParametri = insert_exec_param_into_list(name, value);
+    }
+    /* chiudo il file settings */
+    fclose(settings);
+
+#ifdef DEBUG
+    print_exec_param_list();
+#endif
+
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(j = 0; j < SO_WIDTH; j++){
+            /* genera la matrice delle capacità per ogni cella, genera un valore casuale tra CAP_MIN e CAP_MAX */
+            SO_CAP[i][j] = SO_CAP_MIN + rand() % (SO_CAP_MAX - (SO_CAP_MIN - 1));
+
+            /* genera la matrice dei tempi di attesa per ogni cella, genera un valore casuale tra TIMENSEC_MIN e TIMENSEC_MAX */
+            SO_TIMENSEC[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
+        }
+    }    
+
 }
 
 void map_generator(){
@@ -71,25 +174,51 @@ void map_generator(){
     assign_source_cells();
 }
 
+void init_map(){
+    int i, j;
+    for (i = 0; i < SO_HEIGHT; i++){
+        for (j = 0; j < SO_WIDTH; j++)
+            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
+    }
+}
+
 void assign_holes_cells(){
     int i, x, y, esito=0; /* valore restituito dalla check_cell_2be_inaccessible(): 0 -> cella non adatta ad essere inaccessibile per vincoli di progetto. 1 -> cella adatta ad essere inaccessibile */
+    int SO_HOLES;
     srand(time(NULL)); /* inizializzo il random number generator */ 
+
+    /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo */
+    
+    if((SO_HOLES = search_4_exec_param("SO_HOLES")) == 0){
+        fprintf(stderr, "Parametro SO_HOLES non trovato nella lista dei parametri!\n");
+		exit(EXIT_FAILURE);
+    }
 
     for (i = 0; i < SO_HOLES; i++){
         do{
-            x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
-            y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */
+        
+            x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */  
+            y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */    
             if(map[x][y] != 0) /* se la cella non è già segnata come inaccessibile */
                 esito = check_cell_2be_inaccessible(x, y);
         }while(esito == 0); /* finché non trovo una cella adatta ad essere definita inaccessibile */
-        map[x][y] = 0; /* rendo effettivamente la cella inaccessibile */
+        map[x][y] = 0;  /* rendo effettivamente la cella inaccessibile */
         esito = 0; 
     }
 }
 
 void assign_source_cells(){
     int i, x, y;
+    int SO_SOURCES;
     srand(time(NULL)); /* inizializzo il random number generator */ 
+    
+    /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo. */
+    if((SO_SOURCES = search_4_exec_param("SO_SOURCES")) == 0){
+        fprintf(stderr, "Parametro SO_SOURCES non trovato nella lista dei parametri!\n");
+		exit(EXIT_FAILURE);
+    }
+
+    dprintf(1,"%d",SO_SOURCES);
     
     for (i = 0; i < SO_SOURCES; i++){
         do{
@@ -101,13 +230,125 @@ void assign_source_cells(){
     }
 }
 
-void init_map(){
-    int i, j;
-    for (i = 0; i < SO_HEIGHT; i++){
-        for (j = 0; j < SO_WIDTH; j++)
-            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
+void print_map(int isTerminal){
+    /* indici per ciclare */
+    int i, k;
+
+    /* cicla per tutti gli elementi della mappa */
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(k = 0; k < SO_WIDTH; k++){
+            switch (map[i][k])
+            {
+            /* CASO 0: cella invalida, quadratino nero */
+            case 0:
+                printf("|X");
+                break;
+            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
+            case 1:
+                printf("|_");
+                break;
+            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
+            case 2:
+                if(isTerminal)
+                    printf("|Z");
+                else
+                    printf("|_");
+                break;
+            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
+            default:
+                if(isTerminal)
+                    printf("|L");
+                else
+                    printf("E");
+                break;
+            }
+        }
+        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
+        printf("|\n");
     }
 }
+
+void source_processes_generator(){
+    int x,y;
+    char *source_args[3];
+    char aus[50];
+
+    for (x = 0; x < SO_HEIGHT; x++){
+        for (y = 0; y < SO_WIDTH; y++){
+            if(map[x][y] == 2){
+                switch(SO_SOURCES_PID[x][y] = fork()){
+                    case -1:
+                        /* errore nella fork */
+                        fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
+                        exit(EXIT_FAILURE);
+                        break;
+                    
+                    /* caso PROCESSO FIGLIO */ 
+                    case 0:
+                        dprintf(1, "\nFIGLIO: %d",getpid());
+
+                        sprintf(aus, "%s", "Source");
+                        source_args[0] = aus;
+                        sprintf(aus, "%i", x);
+                        source_args[1] = aus;
+                        sprintf(aus, "%i", y);
+                        source_args[2] = aus;
+                        source_args[3] = NULL;
+
+                        /* !PASSAGGIO PARAMETRI NON DA ERRORI MA DA SISTEMARE ANCORA NON PASSA I PARAMETRI NEL MODO GIUSTO */
+                        execvp(SOURCE, source_args);
+
+                        /* ERRORE ESECUZIONE DELLA EXECVP */
+                        fprintf(stderr, "\n%s: %d. EXECVE Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+	                    exit(EXIT_FAILURE);
+                        break;
+                    
+                    /* caso PROCESSO PADRE */
+                    default:
+                        /* DA TOGLIERE !!!!!!!!!!!!!!!!!!!!!!!!!!ma almeno no nrimane aperto in sospeso nella shell */
+                        exit(EXIT_SUCCESS); 
+                        break;
+                }
+                
+            }
+        }
+    }
+}
+
+param_list insert_exec_param_into_list(char name[], int value){
+    /* genero un nuovo nodo(name,value) della lista e lo inserisco all'interno della stessa */
+    param_list new_elem;
+	new_elem = malloc(sizeof(*new_elem));
+	new_elem->value = value;
+	strcpy(new_elem->name, name);
+	new_elem->next = listaParametri;
+	return new_elem;
+}
+
+void print_exec_param_list(){
+    /* stampa dei nodi contenuti nella lista */
+    param_list aus_param_list = listaParametri;
+	if (aus_param_list == NULL) {
+		printf("Empty EXECUTION PARAM LIST\n");
+		return;
+	}
+	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
+		printf("\nNOME: %s ---- VALORE: %d", aus_param_list->name, aus_param_list->value);
+	}
+	printf("\n");
+}
+
+int search_4_exec_param(char nomeParam[]){
+    param_list aus_param_list = listaParametri;
+	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
+        if (strcmp(aus_param_list->name,nomeParam) == 0){
+            return aus_param_list->value;
+        }
+			
+    }
+	return 0;
+}
+
 
 int check_cell_2be_inaccessible(int x, int y){ 
     int esito = 1; /* assumo che sia possibile rendere la cella inaccessibile */
@@ -160,138 +401,36 @@ int check_cell_2be_inaccessible(int x, int y){
     return esito;
 }
 
-void print_map(int isTerminal){
-    /* indici per ciclare */
-    int i, k;
+void free_param_list(param_list aus_list){
+    /* eseguo la free dello spazio allocato per i nodi della lista */
+	if (aus_list == NULL) {
+		return;
+	}
+    
+	free_param_list(aus_list->next);
+#ifdef DEBUG
+    printf("sto liberando: %s", aus_list->name);
+#endif
+	free(aus_list);
+}
 
-    /* cicla per tutti gli elementi della mappa */
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            switch (map[i][k])
-            {
-            /* CASO 0: cella invalida, quadratino nero */
-            case 0:
-                printf("|X");
-                break;
-            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
-            case 1:
-                printf("|_");
-                break;
-            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
-            case 2:
-                if(isTerminal)
-                    printf("|Z");
-                else
-                    printf("|_");
-                break;
-            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
-            default:
-                if(isTerminal)
-                    printf("|L");
-                else
-                    printf("E");
-                break;
-            }
-        }
-        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("|\n");
+void free_mat(){
+    int i;
+    int *currentIntPtr;
+    pid_t *currentPid_tPtr;
+    /* free map 2d array */
+    for (i = 0; i < SO_HEIGHT; i++){
+        currentIntPtr = map[i];
+        free(currentIntPtr);
+
+        currentIntPtr = SO_CAP[i];
+        free(currentIntPtr);
+
+        currentIntPtr = SO_TIMENSEC[i];
+        free(currentIntPtr);
+
+        currentIntPtr = SO_SOURCES_PID[i];
+        free(currentIntPtr);
     }
 }
 
-void init(){
-    FILE * settings ;
-    char title[100];
-    int option;
-
-    int i, j;
-
-    /* inizializzo il random */
-    srand(time(NULL));
-
-    /* carico il file settings */
-    settings = fopen("settings" , "r");
-
-    /* leggo ogni riga del file finche non raggiunge la fine EOF */
-    while(fscanf(settings, "%s = %d\n", title, &option) != EOF){
-
-        /* controllo la variabile da assegnare e imposto il suo valore */
-        if(strcmp(title, "SO_HOLES") == 0){
-            SO_HOLES = option;
-        }else if(strcmp(title, "SO_SOURCES") == 0){
-            SO_SOURCES = option;
-        }else if(strcmp(title, "SO_TAXI") == 0){
-            SO_TAXI = option;
-        }else if(strcmp(title, "SO_CAP_MIN") == 0){
-            SO_CAP_MIN = option;
-        }else if(strcmp(title, "SO_CAP_MAX") == 0){
-            SO_CAP_MAX = option;
-        }else if(strcmp(title, "SO_TIMENSEC_MIN") == 0){
-            SO_TIMENSEC_MIN = option;
-        }else if(strcmp(title, "SO_TIMENSEC_MAX") == 0){
-            SO_TIMENSEC_MAX = option;
-        }else if(strcmp(title, "SO_TIMEOUT") == 0){
-            SO_TIMEOUT = option;
-        }else if(strcmp(title, "SO_DURATION") == 0){
-            SO_DURATION = option;
-        }
-    }
-
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(j = 0; j < SO_WIDTH; j++){
-            /* genera la matrice delle capacità per ogni cella, genera un valore casuale tra CAP_MIN e CAP_MAX */
-            SO_CAP[i][j] = SO_CAP_MIN + rand() % (SO_CAP_MAX - (SO_CAP_MIN - 1));
-
-            /* genera la matrice dei tempi di attesa per ogni cella, genera un valore casuale tra TIMENSEC_MIN e TIMENSEC_MAX */
-            SO_TIMENSEC[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
-        }
-    }
-
-    /* chiude il file settings */
-    fclose(settings);
-}
-
-void source_processes_generator(){
-    int x,y;
-   /*char *args[4];*/
-   char* args[] = {
-    "Source",
-		"12", 
-		"14",
-		NULL
-	};
-    for (x = 0; x < SO_HEIGHT; x++){
-        for (y = 0; y < SO_WIDTH; y++){
-            if(map[x][y] == 2){
-                switch(SO_SOURCES_PID[x][y] = fork()){
-                    case -1:
-                        /* errore nella fork */
-                        fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
-                        exit(EXIT_FAILURE);
-                        break;
-                    
-                    /* caso PROCESSO FIGLIO */ 
-                    case 0:
-                        dprintf(1, "\nFIGLIO: %d",getpid());
-                        /**args[0] = *"Source";*/
-                        /*args[1] = (char)x;
-                        *args[2] = (char)y;*/
-                        
-                        /*args[3] = NULL;*/
-                        dprintf(1, "\nSource");
-                        execve("./Source",args,NULL);
-
-                         /* ERRORE ESECUZIONE DELLA EXECVE */
-                        fprintf(stderr, "\n%s: %d. EXECVE Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
-	                    exit(EXIT_FAILURE);
-                        break;
-                    
-                    /* caso PROCESSO PADRE */
-                    default:
-                        printf("\nCiao sono il padre");
-                        break;
-                }
-                
-            }
-        }
-    }
-}

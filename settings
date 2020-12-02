@@ -1,4 +1,3 @@
-//mantenere lo spazio a destra e a sinistra di '='
 SO_HOLES = 4
 SO_SOURCES = 1
 SO_TAXI = 1

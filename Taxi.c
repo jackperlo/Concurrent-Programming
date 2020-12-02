@@ -1,3 +1,3 @@
-#include "Taxi.h"
-
-void vuoto2(){}
+int main(){
+    return 0;
+}
