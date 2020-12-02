@@ -8,6 +8,12 @@
 #include <errno.h>
 #include <signal.h>
 
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
+
 /*-------------DEFINE di COSTANTI--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
 #define TAXI "./Taxi"
@@ -28,6 +34,7 @@ void source_processes_generator(); /* fork dei processi sorgenti */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
 void timed_print(int sig); /* stampa temporizzata della mappa ogni secondo */
+void map_cpy(int** cpy); /* converte la mappa in una matrice di array */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -228,7 +235,7 @@ void assign_source_cells(){
 		exit(EXIT_FAILURE);
     }
 
-    dprintf(1,"%d",SO_SOURCES);
+    /*dprintf(1,"%d",SO_SOURCES);*/
     
     for (i = 0; i < SO_SOURCES; i++){
         do{
@@ -280,8 +287,29 @@ void print_map(int isTerminal){
 
 void source_processes_generator(){
     int x,y;
-    char *source_args[3];
+    char *source_args[6];
     char aus[50];
+    int **sh_map;
+    int memd;
+    pid_t key;
+
+    /* INIZIALIZZO LA SHARED MEMORY PER MAP *//*
+    if ((key = ftok("map", 'R')) == -1)
+    {
+        perror("non esiste il file map");
+        exit(1);
+    }
+
+    if((memd = shmget(key, sizeof(map), SHM_R | SHM_W | IPC_CREAT | IPC_EXCL)) == -1) 
+        fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
+
+    sh_map = shmat(memd, NULL, SHM_R | SHM_W);
+    if(sh_map == (int**)(-1))
+        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
+
+    map_cpy(sh_map);*/
+
+    /* CREO I PROCESSI */
 
     for (x = 0; x < SO_HEIGHT; x++){
         for (y = 0; y < SO_WIDTH; y++){
@@ -295,17 +323,33 @@ void source_processes_generator(){
                     
                     /* caso PROCESSO FIGLIO */ 
                     case 0:
-                        dprintf(1, "\nFIGLIO: %d",getpid());
 
+                        source_args[0] = malloc(100 * sizeof(char));
                         sprintf(aus, "%s", "Source");
-                        source_args[0] = aus;
-                        sprintf(aus, "%i", x);
-                        source_args[1] = aus;
-                        sprintf(aus, "%i", y);
-                        source_args[2] = aus;
-                        source_args[3] = NULL;
+                        strcpy(source_args[0], aus);
 
-                        /* !PASSAGGIO PARAMETRI NON DA ERRORI MA DA SISTEMARE ANCORA NON PASSA I PARAMETRI NEL MODO GIUSTO */
+                        source_args[1] = malloc(10 * sizeof(char));
+                        sprintf(aus, "%d", x);
+                        strcpy(source_args[1], aus);
+
+                        source_args[2] = malloc(10 * sizeof(char));
+                        sprintf(aus, "%d", y);
+                        strcpy(source_args[2], aus);
+
+                        source_args[3] = malloc(10 * sizeof(char));
+                        sprintf(aus, "%d", SO_HEIGHT);
+                        strcpy(source_args[3], aus);
+
+                        source_args[4] = malloc(10 * sizeof(char));
+                        sprintf(aus, "%d", SO_WIDTH);
+                        strcpy(source_args[4], aus);
+
+                        source_args[5] = malloc(100 * sizeof(char));
+                        sprintf(aus, "%d", memd);
+                        strcpy(source_args[5], aus);
+
+                        source_args[6] = NULL;
+
                         execvp(SOURCE, source_args);
 
                         /* ERRORE ESECUZIONE DELLA EXECVP */
@@ -315,8 +359,6 @@ void source_processes_generator(){
                     
                     /* caso PROCESSO PADRE */
                     default:
-                        /* DA TOGLIERE !!!!!!!!!!!!!!!!!!!!!!!!!!ma almeno no nrimane aperto in sospeso nella shell */
-                        /*exit(EXIT_SUCCESS); */
                         break;
                 }
                 
@@ -469,5 +511,18 @@ void timed_print(int sig){
         printf("\n\n--------------------------------------\nSecondo: %d\nInvalidi: %d\nTaxi: %d\n", seconds, 5, 5);
         print_map(0);
         alarm(1);
+    }
+}
+
+void map_cpy(int** cpy){
+    int i, k;
+
+    cpy = malloc(SO_HEIGHT * sizeof(int*));
+
+    for(i = 0; i < SO_HEIGHT; i++){
+        cpy[i] = malloc(SO_WIDTH * sizeof(int));
+        for(k = 0; k < SO_WIDTH; k++){
+            cpy[i][k] = map[i][k];
+        }
     }
 }
