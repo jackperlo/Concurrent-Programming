@@ -19,7 +19,7 @@
 #define TAXI "./Taxi"
 #define SOURCE "./Source"  
 /* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
-#define SETTING_PATH "settings"
+#define SETTING_PATH "./settings"
 #define NUM_PARAM 9
 
 /*------------DICHIARAZIONE METODI------------*/
@@ -50,9 +50,9 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
-int executing = 0;
-int seconds = 0;
-int SO_DURATION;
+int executing = 0; /* variabile BINARIA. 0-> Esecuzione Conclusa | 1-> In Esecuzione */
+int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
+int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -66,6 +66,7 @@ param_list insert_exec_param_into_list(char name[], int value); /* inserisce i p
 void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
 int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
+int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 
 /*
 -------------elenco dei parametri d'esecuzione e loro descrizione------------------
@@ -95,18 +96,17 @@ int main(int argc, char *argv[]){
 		exit(EXIT_FAILURE);
     }
 
+    /* CONFIGURAZIONE DELL'ESECUZIONE */
     init();
     map_generator();
-
     source_processes_generator();
-
-
     SO_DURATION = search_4_exec_param("SO_DURATION");
-    executing = 1;
+
+    /* START UFFICIALE DELL'ESECUZIONE */
+    executing = 1; 
     execution();
     
-    
-
+    /* CONCLUSIONE DELL'ESECUZIONE */
     free_param_list(listaParametri);
     free_mat();
     return 0;
@@ -118,6 +118,7 @@ void init(){
     /* conterranno nome e valore di ogni parametro definito in settings */
     char name[100];
     int value;
+    int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
     
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
     map = (int **)malloc(SO_HEIGHT*sizeof(int *));
@@ -162,7 +163,7 @@ void init(){
     srand(time(NULL));
     /* apro il file settings */
     if((settings = fopen(SETTING_PATH , "r")) == NULL){
-        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
+        fprintf(stderr, "Errore durante l'apertura file Setting che contiene i parametri\n");
 		exit(EXIT_FAILURE);
     }
     for(i=0; i<NUM_PARAM; i++){
@@ -170,6 +171,13 @@ void init(){
         while(fscanf(settings, "%s = %d\n", name, &value) != EOF)
             listaParametri = insert_exec_param_into_list(name, value);
     }
+
+    /* check: ho tutti e soli i NUM_PARAM parametri d'esecuzione richiesti? */
+    if((check_n_param_return_value = check_n_param_in_exec_list()) != NUM_PARAM){
+        fprintf(stderr, "Master.c ERRORE nel numero di parametri presenti nel file di Settings.\nRichiesti:%d\nOttenuti:%d\n", NUM_PARAM, check_n_param_return_value);
+		exit(EXIT_FAILURE);
+    }
+
     /* chiudo il file settings */
     fclose(settings);
 
@@ -199,7 +207,7 @@ void init_map(){
     int i, j;
     for (i = 0; i < SO_HEIGHT; i++){
         for (j = 0; j < SO_WIDTH; j++)
-            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
+            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente=2, no inaccessibile=0) */
     }
 }
 
@@ -290,10 +298,12 @@ void print_map(int isTerminal){
 }
 
 void source_processes_generator(){
-    int x,y;
-    int a = 30;
-    char *source_args[6];
+    int x,y; /* coordinate di map al quale si trova il processo Source che viene forkato */
+    char *source_args[6]; /* array di stringhe da passare al processo Source */
     char aus[50];
+
+    /* variabili per settaggio della shared memory */
+    int a = 30;
     int *sh_map;
     int memd;
     key_t key;
@@ -310,15 +320,12 @@ void source_processes_generator(){
     if(sh_map == (int)(-1))
         fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
 
-    
-    
-
     sh_map = a;
     printf("sh_map = %p\n", (void *) &sh_map);*/
     /*print_map_specific(sh_map, 0);*/
 
-    /* CREO I PROCESSI */
 
+    /* CREO I PROCESSI */
     for (x = 0; x < SO_HEIGHT; x++){
         for (y = 0; y < SO_WIDTH; y++){
             if(map[x][y] == 2){
@@ -361,7 +368,7 @@ void source_processes_generator(){
                         execvp(SOURCE, source_args);
 
                         /* ERRORE ESECUZIONE DELLA EXECVP */
-                        fprintf(stderr, "\n%s: %d. EXECVE Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+                        fprintf(stderr, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
 	                    exit(EXIT_FAILURE);
                         break;
                     
@@ -369,20 +376,27 @@ void source_processes_generator(){
                     default:
                         break;
                 }
-                
             }
         }
     }
 }
 
 param_list insert_exec_param_into_list(char name[], int value){
-    /* genero un nuovo nodo(name,value) della lista e lo inserisco all'interno della stessa */
     param_list new_elem;
-	new_elem = malloc(sizeof(*new_elem));
-	new_elem->value = value;
-	strcpy(new_elem->name, name);
-	new_elem->next = listaParametri;
-	return new_elem;
+    int esito = 1; /* controllo che non si stiano inserendo parametri doppi */
+    esito = search_4_exec_param(name);
+
+    if(esito == 0){ /* se non ancora presente nella lista */
+        /* genero un nuovo nodo(name,value) della lista e lo inserisco all'interno della stessa */
+        new_elem = malloc(sizeof(*new_elem));
+        new_elem->value = value;
+        strcpy(new_elem->name, name);
+        new_elem->next = listaParametri;
+        return new_elem;
+    }else{
+        fprintf(stderr, "\n%s: %d. PARAMETRO DUPLICATO nel file di SETTING.\nNome del parametro doppio: %s\n", __FILE__, __LINE__, name);
+        exit(EXIT_FAILURE);
+    }
 }
 
 void print_exec_param_list(){
@@ -403,12 +417,19 @@ int search_4_exec_param(char nomeParam[]){
 	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
         if (strcmp(aus_param_list->name,nomeParam) == 0){
             return aus_param_list->value;
-        }
-			
+        }	
     }
 	return 0;
 }
 
+int check_n_param_in_exec_list(){
+    int n_elem = 0;
+    param_list aus_param_list = listaParametri;
+	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
+        n_elem++;	
+    }
+	return n_elem;
+}
 
 int check_cell_2be_inaccessible(int x, int y){ 
     int esito = 1; /* assumo che sia possibile rendere la cella inaccessibile */
@@ -468,9 +489,6 @@ void free_param_list(param_list aus_list){
 	}
     
 	free_param_list(aus_list->next);
-#ifdef DEBUG
-    printf("sto liberando: %s", aus_list->name);
-#endif
 	free(aus_list);
 }
 
@@ -497,7 +515,7 @@ void free_mat(){
 void execution(){
     /* associa l'handler dell'alarm */
     if (signal(SIGALRM, timed_print)==SIG_ERR) {
-        printf("\nErrore della disposizione dell'handler\n");
+        fprintf(stderr,"\n%s: %d.SIGALARM Error\n", __FILE__, __LINE__);
         exit(EXIT_FAILURE);
     }else{
         /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
@@ -505,6 +523,7 @@ void execution(){
         while(seconds < SO_DURATION){
             /* aspetta che finisca il tempo di esecuzione DA MODIFICARE */
 
+            /* ATTESA ATTIVA (?) */
             /* DA TOGLIERE */
             if(seconds == 3)
                 kill_sources();
@@ -541,7 +560,7 @@ void print_map_specific(int** m, int isTerminal){
     /* indici per ciclare */
     int i, k;
     printf("value = %p",(void *) &m);
-    printf("Specifica map:\n");
+    printf("Specific map:\n");
     /* cicla per tutti gli elementi della mappa */
     for(i = 0; i < SO_HEIGHT; i++){
         for(k = 0; k < SO_WIDTH; k++){
