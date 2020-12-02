@@ -34,7 +34,8 @@ void source_processes_generator(); /* fork dei processi sorgenti */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
 void timed_print(int sig); /* stampa temporizzata della mappa ogni secondo */
-void map_cpy(int** cpy); /* converte la mappa in una matrice di array */
+void kill_sources(); /* elimina tutti i figli sources */
+void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -99,10 +100,13 @@ int main(int argc, char *argv[]){
 
     source_processes_generator();
 
+
     SO_DURATION = search_4_exec_param("SO_DURATION");
     executing = 1;
     execution();
     
+    
+
     free_param_list(listaParametri);
     free_mat();
     return 0;
@@ -287,27 +291,31 @@ void print_map(int isTerminal){
 
 void source_processes_generator(){
     int x,y;
+    int a = 30;
     char *source_args[6];
     char aus[50];
-    int **sh_map;
+    int *sh_map;
     int memd;
-    pid_t key;
+    key_t key;
 
     /* INIZIALIZZO LA SHARED MEMORY PER MAP *//*
-    if ((key = ftok("map", 'R')) == -1)
+    if ((key = ftok(".", 'b')) == -1)
     {
-        perror("non esiste il file map");
-        exit(1);
+        perror("non esiste il file per la shared memory");
+        exit(-1);
     }
-
-    if((memd = shmget(key, sizeof(map), SHM_R | SHM_W | IPC_CREAT | IPC_EXCL)) == -1) 
+    if((memd = shmget(key, sizeof(int), 0666 | IPC_CREAT)) == -1) 
         fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
-
-    sh_map = shmat(memd, NULL, SHM_R | SHM_W);
-    if(sh_map == (int**)(-1))
+    sh_map =  shmat(memd, 0, 0);
+    if(sh_map == (int)(-1))
         fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
 
-    map_cpy(sh_map);*/
+    
+    
+
+    sh_map = a;
+    printf("sh_map = %p\n", (void *) &sh_map);*/
+    /*print_map_specific(sh_map, 0);*/
 
     /* CREO I PROCESSI */
 
@@ -496,6 +504,10 @@ void execution(){
         alarm(1);
         while(seconds < SO_DURATION){
             /* aspetta che finisca il tempo di esecuzione DA MODIFICARE */
+
+            /* DA TOGLIERE */
+            if(seconds == 3)
+                kill_sources();
         }
         /* esecuzione terminata */
         executing = 0;
@@ -514,15 +526,52 @@ void timed_print(int sig){
     }
 }
 
-void map_cpy(int** cpy){
-    int i, k;
+void kill_sources(){
+    int i,j;
 
-    cpy = malloc(SO_HEIGHT * sizeof(int*));
-
-    for(i = 0; i < SO_HEIGHT; i++){
-        cpy[i] = malloc(SO_WIDTH * sizeof(int));
-        for(k = 0; k < SO_WIDTH; k++){
-            cpy[i][k] = map[i][k];
+    for(i=0; i<SO_HEIGHT; i++){
+        for(j=0; j<SO_WIDTH; j++){
+            if(SO_SOURCES_PID[i][j] > 0)
+                kill(SO_SOURCES_PID[i][j], SIGQUIT);
         }
+    }
+}
+
+void print_map_specific(int** m, int isTerminal){
+    /* indici per ciclare */
+    int i, k;
+    printf("value = %p",(void *) &m);
+    printf("Specifica map:\n");
+    /* cicla per tutti gli elementi della mappa */
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(k = 0; k < SO_WIDTH; k++){
+            switch (m[i][k])
+            {
+            /* CASO 0: cella invalida, quadratino nero */
+            case 0:
+                printf("|X");
+                break;
+            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
+            case 1:
+                printf("|_");
+                break;
+            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
+            case 2:
+                if(isTerminal)
+                    printf("|Z");
+                else
+                    printf("|_");
+                break;
+            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
+            default:
+                if(isTerminal)
+                    printf("|L");
+                else
+                    printf("E");
+                break;
+            }
+        }
+        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
+        printf("|\n");
     }
 }
