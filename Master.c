@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 
 /*-------------DEFINE di COSTANTI--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
@@ -25,6 +26,8 @@ int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_gener
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void source_processes_generator(); /* fork dei processi sorgenti */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
+void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
+void timed_print(int sig); /* stampa temporizzata della mappa ogni secondo */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -39,6 +42,9 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
+int executing = 0;
+int seconds = 0;
+int SO_DURATION;
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -83,8 +89,12 @@ int main(int argc, char *argv[]){
 
     init();
     map_generator();
-    print_map(0);
+
     source_processes_generator();
+
+    SO_DURATION = search_4_exec_param("SO_DURATION");
+    executing = 1;
+    execution();
     
     free_param_list(listaParametri);
     free_mat();
@@ -306,7 +316,7 @@ void source_processes_generator(){
                     /* caso PROCESSO PADRE */
                     default:
                         /* DA TOGLIERE !!!!!!!!!!!!!!!!!!!!!!!!!!ma almeno no nrimane aperto in sospeso nella shell */
-                        exit(EXIT_SUCCESS); 
+                        /*exit(EXIT_SUCCESS); */
                         break;
                 }
                 
@@ -434,3 +444,30 @@ void free_mat(){
     }
 }
 
+void execution(){
+    /* associa l'handler dell'alarm */
+    if (signal(SIGALRM, timed_print)==SIG_ERR) {
+        printf("\nErrore della disposizione dell'handler\n");
+        exit(EXIT_FAILURE);
+    }else{
+        /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
+        alarm(1);
+        while(seconds < SO_DURATION){
+            /* aspetta che finisca il tempo di esecuzione DA MODIFICARE */
+        }
+        /* esecuzione terminata */
+        executing = 0;
+        printf("\n\n--------------------------------------\nFine: %d secondi di simulazione\n", seconds);
+        print_map(1);
+    }
+}
+
+void timed_print(int sig){
+    /* se sto eseguendo la simulazione il ciclo continua in loop incrementando i secondi passati dall'inizio */
+    if(executing){
+        seconds++;
+        printf("\n\n--------------------------------------\nSecondo: %d\nInvalidi: %d\nTaxi: %d\n", seconds, 5, 5);
+        print_map(0);
+        alarm(1);
+    }
+}
