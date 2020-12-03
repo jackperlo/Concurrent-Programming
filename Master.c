@@ -33,9 +33,10 @@ void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuz
 void source_processes_generator(); /* fork dei processi sorgenti */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
-void timed_print(int sig); /* stampa temporizzata della mappa ogni secondo */
+void signal_actions(); /* imposta il signal handler */
 void kill_sources(); /* elimina tutti i figli sources */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
+void signal_handler(int sig); /* gestisce i segnali */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -50,9 +51,9 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
-int executing = 0; /* variabile BINARIA. 0-> Esecuzione Conclusa | 1-> In Esecuzione */
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
+sigset_t masked;
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -60,6 +61,7 @@ typedef struct node {
 	char name[20];
 	struct node * next;  
 } node;
+
 typedef node* param_list; /* conterrà la lista dei parametri passati tramite file di settings */
 param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
 param_list insert_exec_param_into_list(char name[], int value); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
@@ -67,6 +69,11 @@ void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
 int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
+
+struct map_passed_to_children{ 
+        int *map_passed;
+    }; 
+struct map_passed_to_children *shd_mem_map;
 
 /*
 -------------elenco dei parametri d'esecuzione e loro descrizione------------------
@@ -101,14 +108,14 @@ int main(int argc, char *argv[]){
     map_generator();
     source_processes_generator();
     SO_DURATION = search_4_exec_param("SO_DURATION");
-
+    
     /* START UFFICIALE DELL'ESECUZIONE */
-    executing = 1; 
     execution();
     
     /* CONCLUSIONE DELL'ESECUZIONE */
     free_param_list(listaParametri);
     free_mat();
+
     return 0;
 }
 
@@ -127,7 +134,7 @@ void init(){
     for (i=0; i<SO_HEIGHT; i++){
         map[i] = malloc(SO_WIDTH*sizeof(int));
         if (map[i] == NULL)
-        return;
+            return;
     }
 
     SO_CAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
@@ -136,7 +143,7 @@ void init(){
     for (i=0; i<SO_HEIGHT; i++){
         SO_CAP[i] = malloc(SO_WIDTH*sizeof(int));
         if (SO_CAP[i] == NULL)
-        return;
+            return;
     }
 
     SO_TIMENSEC = (int **)malloc(SO_HEIGHT*sizeof(int *));
@@ -145,7 +152,7 @@ void init(){
     for (i=0; i<SO_HEIGHT; i++){
         SO_TIMENSEC[i] = malloc(SO_WIDTH*sizeof(int));
         if (SO_TIMENSEC[i] == NULL)
-        return;
+            return;
     }
 
     SO_SOURCES_PID = (pid_t **)malloc(SO_HEIGHT*sizeof(pid_t *));
@@ -154,7 +161,7 @@ void init(){
     for (i=0; i<SO_HEIGHT; i++){
         SO_SOURCES_PID[i] = malloc(SO_WIDTH*sizeof(pid_t));
         if (SO_SOURCES_PID[i] == NULL)
-        return;
+            return;
     }
 
 
@@ -163,7 +170,7 @@ void init(){
     srand(time(NULL));
     /* apro il file settings */
     if((settings = fopen(SETTING_PATH , "r")) == NULL){
-        fprintf(stderr, "Errore durante l'apertura file Setting che contiene i parametri\n");
+        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
 		exit(EXIT_FAILURE);
     }
     for(i=0; i<NUM_PARAM; i++){
@@ -207,7 +214,7 @@ void init_map(){
     int i, j;
     for (i = 0; i < SO_HEIGHT; i++){
         for (j = 0; j < SO_WIDTH; j++)
-            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente=2, no inaccessibile=0) */
+            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
     }
 }
 
@@ -298,32 +305,8 @@ void print_map(int isTerminal){
 }
 
 void source_processes_generator(){
-    int x,y; /* coordinate di map al quale si trova il processo Source che viene forkato */
-    char *source_args[6]; /* array di stringhe da passare al processo Source */
-    char aus[50];
-
-    /* variabili per settaggio della shared memory */
-    int a = 30;
-    int *sh_map;
-    int memd;
-    key_t key;
-
-    /* INIZIALIZZO LA SHARED MEMORY PER MAP *//*
-    if ((key = ftok(".", 'b')) == -1)
-    {
-        perror("non esiste il file per la shared memory");
-        exit(-1);
-    }
-    if((memd = shmget(key, sizeof(int), 0666 | IPC_CREAT)) == -1) 
-        fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
-    sh_map =  shmat(memd, 0, 0);
-    if(sh_map == (int)(-1))
-        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
-
-    sh_map = a;
-    printf("sh_map = %p\n", (void *) &sh_map);*/
-    /*print_map_specific(sh_map, 0);*/
-
+    int x,y,i,k; 
+    char **source_args; /* matrice di stringhe che contiene tutti i parametri passati al source */
 
     /* CREO I PROCESSI */
     for (x = 0; x < SO_HEIGHT; x++){
@@ -338,33 +321,35 @@ void source_processes_generator(){
                     
                     /* caso PROCESSO FIGLIO */ 
                     case 0:
+                        source_args = malloc((6 + SO_HEIGHT) * sizeof(char*));
 
                         source_args[0] = malloc(100 * sizeof(char));
-                        sprintf(aus, "%s", "Source");
-                        strcpy(source_args[0], aus);
+                        sprintf(source_args[0], "%s", "Source");
 
                         source_args[1] = malloc(10 * sizeof(char));
-                        sprintf(aus, "%d", x);
-                        strcpy(source_args[1], aus);
+                        sprintf(source_args[1], "%d", x);
 
                         source_args[2] = malloc(10 * sizeof(char));
-                        sprintf(aus, "%d", y);
-                        strcpy(source_args[2], aus);
+                        sprintf(source_args[2], "%d", y);
 
                         source_args[3] = malloc(10 * sizeof(char));
-                        sprintf(aus, "%d", SO_HEIGHT);
-                        strcpy(source_args[3], aus);
+                        sprintf(source_args[3], "%d", SO_HEIGHT);
 
                         source_args[4] = malloc(10 * sizeof(char));
-                        sprintf(aus, "%d", SO_WIDTH);
-                        strcpy(source_args[4], aus);
+                        sprintf(source_args[4], "%d", SO_WIDTH);
 
-                        source_args[5] = malloc(100 * sizeof(char));
-                        sprintf(aus, "%d", memd);
-                        strcpy(source_args[5], aus);
+                        /* valori delle celle della mappa di gioco */
+                        for(i = 0; i < SO_HEIGHT; i++){
+                            source_args[5+i] = malloc(SO_WIDTH * sizeof(char));
 
-                        source_args[6] = NULL;
+                            for(k = 0; k < SO_WIDTH; k++){
+                                source_args[5+i][k] = (char) map[i][k];
+                            }
+                        }
 
+                        source_args[5+SO_HEIGHT] = NULL;
+
+                        dprintf(1, "\nMASTER OK");
                         execvp(SOURCE, source_args);
 
                         /* ERRORE ESECUZIONE DELLA EXECVP */
@@ -376,6 +361,7 @@ void source_processes_generator(){
                     default:
                         break;
                 }
+                
             }
         }
     }
@@ -417,7 +403,8 @@ int search_4_exec_param(char nomeParam[]){
 	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
         if (strcmp(aus_param_list->name,nomeParam) == 0){
             return aus_param_list->value;
-        }	
+        }
+			
     }
 	return 0;
 }
@@ -489,7 +476,7 @@ void free_param_list(param_list aus_list){
 	}
     
 	free_param_list(aus_list->next);
-	free(aus_list);
+    free(aus_list);
 }
 
 void free_mat(){
@@ -513,36 +500,60 @@ void free_mat(){
 }
 
 void execution(){
+    int status, pid;
     /* associa l'handler dell'alarm */
-    if (signal(SIGALRM, timed_print)==SIG_ERR) {
-        fprintf(stderr,"\n%s: %d.SIGALARM Error\n", __FILE__, __LINE__);
-        exit(EXIT_FAILURE);
-    }else{
-        /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
-        alarm(1);
-        while(seconds < SO_DURATION){
-            /* aspetta che finisca il tempo di esecuzione DA MODIFICARE */
+    signal_actions();
 
-            /* ATTESA ATTIVA (?) */
-            /* DA TOGLIERE */
-            if(seconds == 3)
-                kill_sources();
-        }
-        /* esecuzione terminata */
-        executing = 0;
-        printf("\n\n--------------------------------------\nFine: %d secondi di simulazione\n", seconds);
-        print_map(1);
+    /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
+    alarm(1);
+    while ((pid = wait(&status)) > 0); /* aspetta che siano terminati tutti i suoi figli */
+
+    /* esecuzione terminata */
+    printf("\n\n--------------------------------------\nFine: %d secondi di simulazione\n", seconds);
+    print_map(1);
+}
+
+void signal_actions(){
+    struct sigaction restart; /* nodefer flag, defer flag */
+
+    /* pulisce le struct */
+    bzero(&restart, sizeof(restart));
+
+    restart.sa_handler = signal_handler;
+
+    restart.sa_flags = SA_RESTART;
+
+    sigaddset(&masked, SIGALRM);
+
+    restart.sa_mask = masked;
+
+    if(sigaction(SIGALRM, &restart, NULL)){
+        exit(EXIT_FAILURE);
     }
 }
 
-void timed_print(int sig){
-    /* se sto eseguendo la simulazione il ciclo continua in loop incrementando i secondi passati dall'inizio */
-    if(executing){
-        seconds++;
-        printf("\n\n--------------------------------------\nSecondo: %d\nInvalidi: %d\nTaxi: %d\n", seconds, 5, 5);
-        print_map(0);
-        alarm(1);
+void signal_handler(int sig){
+    sigprocmask(SIG_BLOCK, &masked, NULL);
+    switch (sig)
+    {
+        /* Generazione Richiesta */
+        case SIGALRM:
+            seconds++;
+            printf("\n\n--------------------------------------\nSecondo: %d\nInvalidi: %d\nTaxi: %d\n", seconds, 5, 5);
+            print_map(0);
+            if(seconds < SO_DURATION){
+                alarm(1);
+            }else{
+                kill_sources();
+        /*      kill_taxi();    */
+            }
+            break;
+
+        default:
+            dprintf(1, "\nSignal %d not handled\n", sig);
+            break;
     }
+    sigprocmask(SIG_UNBLOCK, &masked, NULL);
 }
 
 void kill_sources(){
@@ -559,8 +570,8 @@ void kill_sources(){
 void print_map_specific(int** m, int isTerminal){
     /* indici per ciclare */
     int i, k;
-    printf("value = %p",(void *) &m);
-    printf("Specific map:\n");
+    /*printf("value = %p",(void *) &m);*/
+    printf("Specifica map:\n");
     /* cicla per tutti gli elementi della mappa */
     for(i = 0; i < SO_HEIGHT; i++){
         for(k = 0; k < SO_WIDTH; k++){
