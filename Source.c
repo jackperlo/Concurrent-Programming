@@ -18,6 +18,12 @@ int x, y, SO_HEIGHT, SO_WIDTH, timing = 1, requests = 0;
 int **map;
 sigset_t masked;
 
+typedef struct{
+    int value;
+}mapping; /* struct to map the Map into an array*/
+
+mapping *shd_map;
+
 void init(int argc, char *argv[]);
 void print_map(int isTerminal);
 void caller(int sig);
@@ -26,11 +32,12 @@ int stampaStatoMemoria(int shid);
 void cpy_map(int begin, char *argv[]);
 void signal_actions();
 void signal_handler(int sig);
+void struct_to_map();
+void init_map();
 
 int main(int argc, char *argv[]){
     
     init(argc, argv);
-    print_map(0);
     
     signal_actions();
     alarm(1+rand()%10);
@@ -44,7 +51,8 @@ int main(int argc, char *argv[]){
 }
 
 void init(int argc, char *argv[]){
-    int memd, i;
+    int dim = ( SO_WIDTH*SO_HEIGHT*sizeof(mapping*) ) * (sizeof(int) *3);
+    int memd, i, k;
     key_t key;
 
     srand(time(NULL));
@@ -55,25 +63,12 @@ void init(int argc, char *argv[]){
     SO_HEIGHT = atoi(argv[3]);
     SO_WIDTH = atoi(argv[4]);
 
-    map = (int **)malloc(SO_HEIGHT*sizeof(int *));
-    if (map == NULL)
-        return;
-    for (i=0; i<SO_HEIGHT; i++){
-        map[i] = malloc(SO_WIDTH*sizeof(int));
-        if (map[i] == NULL)
-            return;
-    }
+    shd_map = (mapping*)shmat(atoi(argv[5]), NULL, 0);
+    if(shd_map == (mapping*)(-1))
+        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
 
-    cpy_map(5, argv);
-}
-
-void cpy_map(int begin, char *argv[]){
-    int i, k;
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            map[i][k] = argv[begin+i][k];
-        }
-    }
+    init_map();
+    struct_to_map();
 }
 
 void signal_actions(){
@@ -105,7 +100,9 @@ void signal_handler(int sig){
     {
         /* Generazione Richiesta */
         case SIGALRM:
+            requests++;
             dprintf(1,"Aggiungo una richiesta in coda! Sono : %d\n", getpid());
+            print_map(0);
             timing = 1 + rand() % 10;
             alarm(timing);
             break;
@@ -153,11 +150,40 @@ void print_map(int isTerminal){
                 if(isTerminal)
                     printf("|L");
                 else
-                    printf("|E");
+                    printf("|%c",(char)map[i][k]);
                 break;
             }
         }
         /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
         printf("|\n");
     }
+}
+
+void init_map(){
+    int i, j;
+
+    map = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (map == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        map[i] = malloc(SO_WIDTH*sizeof(int));
+        if (map[i] == NULL)
+            return;
+    }
+
+    for (i = 0; i < SO_HEIGHT; i++){
+        for (j = 0; j < SO_WIDTH; j++)
+            map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
+    }
+}
+
+void struct_to_map(){
+    int i, k, cnt=0;
+    for (i = 0; i < SO_HEIGHT; i++){
+        for(k= 0; k < SO_WIDTH; k++){
+            map[i][k] = shd_map[cnt].value; 
+            cnt++;
+        }
+    }
+    print_map(0);
 }

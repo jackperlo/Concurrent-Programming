@@ -37,6 +37,7 @@ void signal_actions(); /* imposta il signal handler */
 void kill_sources(); /* elimina tutti i figli sources */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
+void map_to_struct(); /* convert map into struct */ 
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -54,6 +55,14 @@ pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOU
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
 sigset_t masked;
+int shd_id; /* id della shared memory */
+
+typedef struct{
+    int value;
+}mapping; /* struct to map the Map into an array*/
+
+mapping *map_struct;
+mapping *shd_map;
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -69,11 +78,6 @@ void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
 int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
-
-struct map_passed_to_children{ 
-        int *map_passed;
-    }; 
-struct map_passed_to_children *shd_mem_map;
 
 /*
 -------------elenco dei parametri d'esecuzione e loro descrizione------------------
@@ -92,7 +96,6 @@ int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock
 
 int main(int argc, char *argv[]){
     char *s;
-    
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
     s = getenv("SO_HEIGHT");
     SO_HEIGHT = atoi(s);
@@ -126,8 +129,9 @@ void init(){
     char name[100];
     int value;
     int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
-    
+
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
+
     map = (int **)malloc(SO_HEIGHT*sizeof(int *));
     if (map == NULL)
         return;
@@ -306,7 +310,24 @@ void print_map(int isTerminal){
 
 void source_processes_generator(){
     int x,y,i,k; 
-    char **source_args; /* matrice di stringhe che contiene tutti i parametri passati al source */
+    char *source_args[8];
+    char *map_in_a_string;
+    int size_to_alloc;
+
+    int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) );
+    map_struct = (mapping*)malloc(dim);
+
+    map_to_struct(); /* converte la mappa in una struttura che contiene i valori della matrice */
+
+    /*INIZIALIZZO LA SHARED MEMORY PER MAP */
+    if((shd_id = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | 0666)) == -1) 
+        fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
+    shd_map = (mapping *)shmat(shd_id, NULL, 0);
+    if(shd_map == (mapping*)(-1))
+        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
+    
+    size_to_alloc = dim;
+    memcpy(shd_map, map_struct, dim);
 
     /* CREO I PROCESSI */
     for (x = 0; x < SO_HEIGHT; x++){
@@ -321,35 +342,29 @@ void source_processes_generator(){
                     
                     /* caso PROCESSO FIGLIO */ 
                     case 0:
-                        source_args = malloc((6 + SO_HEIGHT) * sizeof(char*));
-
-                        source_args[0] = malloc(100 * sizeof(char));
+                        source_args[0] = malloc(10 * sizeof(char));
                         sprintf(source_args[0], "%s", "Source");
 
-                        source_args[1] = malloc(10 * sizeof(char));
+                        source_args[1] = malloc(sizeof((char)x));
                         sprintf(source_args[1], "%d", x);
 
-                        source_args[2] = malloc(10 * sizeof(char));
+                        source_args[2] = malloc(sizeof((char)y));
                         sprintf(source_args[2], "%d", y);
 
-                        source_args[3] = malloc(10 * sizeof(char));
+                        source_args[3] = malloc(sizeof((char)SO_HEIGHT));
                         sprintf(source_args[3], "%d", SO_HEIGHT);
 
-                        source_args[4] = malloc(10 * sizeof(char));
+                        source_args[4] = malloc(sizeof((char)SO_WIDTH));
                         sprintf(source_args[4], "%d", SO_WIDTH);
 
-                        /* valori delle celle della mappa di gioco */
-                        for(i = 0; i < SO_HEIGHT; i++){
-                            source_args[5+i] = malloc(SO_WIDTH * sizeof(char));
+                        source_args[5] = malloc(sizeof((char)shd_id));
+                        sprintf(source_args[5], "%d", shd_id);
 
-                            for(k = 0; k < SO_WIDTH; k++){
-                                source_args[5+i][k] = (char) map[i][k];
-                            }
-                        }
+                        source_args[6] = malloc(sizeof((char)size_to_alloc));
+                        sprintf(source_args[6], "%d", size_to_alloc);
 
-                        source_args[5+SO_HEIGHT] = NULL;
+                        source_args[7] = NULL;
 
-                        dprintf(1, "\nMASTER OK");
                         execvp(SOURCE, source_args);
 
                         /* ERRORE ESECUZIONE DELLA EXECVP */
@@ -603,5 +618,15 @@ void print_map_specific(int** m, int isTerminal){
         }
         /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
         printf("|\n");
+    }
+}
+
+void map_to_struct(){
+    int i, j, ctr = 0;
+    for(i = 0; i < SO_HEIGHT; i++){
+        for(j = 0; j < SO_WIDTH; j++){
+            map_struct[ctr].value = map[i][j];
+            ctr++;
+        }
     }
 }
