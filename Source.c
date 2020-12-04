@@ -228,6 +228,7 @@ int generate_request(){
 }
 
 int check_snd_msg_status(int errn){
+
     switch (errno) {
 	case EAGAIN:
 		dprintf(STDERR_FILENO,
