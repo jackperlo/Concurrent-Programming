@@ -1,18 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/sysinfo.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
-#include <errno.h>
-#include <signal.h>
-
-#include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
-#include <sys/shm.h>
-#include <sys/sem.h>
+#include "Common.h"
 
 /*-------------DEFINE di COSTANTI--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
@@ -37,7 +23,10 @@ void signal_actions(); /* imposta il signal handler */
 void kill_sources(); /* elimina tutti i figli sources */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
-void map_to_struct(); /* convert map into struct */ 
+void map_to_struct(int dim); /* convert map into struct */ 
+void init_shd_mem(int dim); /* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
+void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
+void cleaner(); /* metodo per pulizia memoria da deallocare */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -47,20 +36,16 @@ int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta 
 int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 
 /*-------------VARIABILI GLOBALI-------------*/
-int SO_HEIGHT, SO_WIDTH;
-int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
-sigset_t masked;
 int shd_id; /* id della shared memory */
-
-typedef struct{
-    int value;
-}mapping; /* struct to map the Map into an array*/
-
+int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi */
+sigset_t masked; /* maschera per i segnali */ 
+struct msqid_ds *buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
+int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
 mapping *map_struct;
 mapping *shd_map;
 
@@ -90,7 +75,6 @@ int SO_TOP_ROAD;  processo che ha fatto più strada
 int SO_TOP_LENGTH;  processo che ha impiegato più tempo in un viaggio 
 int SO_TOP_REQ;  processo che ha completato più request di clienti 
 int SO_TRIP_SUCCESS;  numero di viaggi eseguiti con successo, da stampare a fine dell'esecuzione 
-int SO_TRIP_NOT_COMPLETED;  numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione 
 int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock 
 */
 
@@ -116,8 +100,7 @@ int main(int argc, char *argv[]){
     execution();
     
     /* CONCLUSIONE DELL'ESECUZIONE */
-    free_param_list(listaParametri);
-    free_mat();
+    cleaner();
 
     return 0;
 }
@@ -129,6 +112,7 @@ void init(){
     char name[100];
     int value;
     int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
+    int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) ); /* dimensione allocata per la shd mem */ 
 
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
 
@@ -206,6 +190,17 @@ void init(){
         }
     }    
 
+    /* converte la mappa in una struttura che contiene i valori della matrice */
+    map_to_struct(dim);
+
+    /* inizializzo la shd mem che sfruttero poi dai figli per ricavare la costruzione della matrice */
+    init_shd_mem(dim);
+
+    /* inizializzo la coda di messaggi che verrà utilizzata dai sources e taxi per scambiarsi informazioni riguardo le richieste. Master la sfrutterà per inserire eventuali richieste derivanti da terminale nella coda */
+    init_msg_queue();
+
+    /* inizializzo i semafori per message queue e celle mappa */
+    init_sem();
 }
 
 void map_generator(){
@@ -309,25 +304,8 @@ void print_map(int isTerminal){
 }
 
 void source_processes_generator(){
-    int x,y,i,k; 
-    char *source_args[8];
-    char *map_in_a_string;
-    int size_to_alloc;
-
-    int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) );
-    map_struct = (mapping*)malloc(dim);
-
-    map_to_struct(); /* converte la mappa in una struttura che contiene i valori della matrice */
-
-    /*INIZIALIZZO LA SHARED MEMORY PER MAP */
-    if((shd_id = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | 0666)) == -1) 
-        fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
-    shd_map = (mapping *)shmat(shd_id, NULL, 0);
-    if(shd_map == (mapping*)(-1))
-        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
-    
-    size_to_alloc = dim;
-    memcpy(shd_map, map_struct, dim);
+    int x,y; 
+    char *source_args[8]; /* argomenti passati ai processi source */
 
     /* CREO I PROCESSI */
     for (x = 0; x < SO_HEIGHT; x++){
@@ -351,19 +329,10 @@ void source_processes_generator(){
                         source_args[2] = malloc(sizeof((char)y));
                         sprintf(source_args[2], "%d", y);
 
-                        source_args[3] = malloc(sizeof((char)SO_HEIGHT));
-                        sprintf(source_args[3], "%d", SO_HEIGHT);
+                        source_args[3] = malloc(sizeof((char)shd_id));
+                        sprintf(source_args[3], "%d", shd_id);
 
-                        source_args[4] = malloc(sizeof((char)SO_WIDTH));
-                        sprintf(source_args[4], "%d", SO_WIDTH);
-
-                        source_args[5] = malloc(sizeof((char)shd_id));
-                        sprintf(source_args[5], "%d", shd_id);
-
-                        source_args[6] = malloc(sizeof((char)size_to_alloc));
-                        sprintf(source_args[6], "%d", size_to_alloc);
-
-                        source_args[7] = NULL;
+                        source_args[4] = NULL;
 
                         execvp(SOURCE, source_args);
 
@@ -621,12 +590,55 @@ void print_map_specific(int** m, int isTerminal){
     }
 }
 
-void map_to_struct(){
+void map_to_struct(int dim){
     int i, j, ctr = 0;
+
+    map_struct = (mapping*)malloc(dim);
     for(i = 0; i < SO_HEIGHT; i++){
         for(j = 0; j < SO_WIDTH; j++){
             map_struct[ctr].value = map[i][j];
             ctr++;
         }
     }
+}
+
+void init_shd_mem(int dim){
+    /*INIZIALIZZO LA SHARED MEMORY PER MAP */
+    if((shd_id = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600)) == -1) 
+        fprintf(stderr, "\n%s: %d. Errore nella creazione della memoria condivisa\n", __FILE__, __LINE__);
+    shd_map = (mapping *)shmat(shd_id, NULL, 0);
+    if(shd_map == (mapping*)(-1))
+        fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
+
+    /* la shd mem verrà deallocata non appena tutti i processi si staccano */
+    shmctl(shd_id, IPC_RMID, NULL); 
+    memcpy(shd_map, map_struct, dim);
+}
+
+void init_msg_queue(){
+    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | 0600); /* AGGIUNGERE IPC_EXCL */
+    if (errno)
+        fprintf(stderr, "%s:%d: Error %d (%s)\n", __FILE__, __LINE__, errno, strerror(errno));
+}
+
+void init_sem(){
+    if(sem_queue = semget(IPC_PRIVATE, 1, IPC_CREAT|IPC_EXCL|S_IRUSR | S_IWUSR)){
+        fprintf(stderr, "%s: %d. Errore in semget #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    sem_arg.val = 
+    if()
+}
+
+void cleaner(){
+    /* deallocazione malloc matrici */
+    free_param_list(listaParametri);
+    free_mat();
+
+    /* deallocazione memoria condivisa */
+    shmdt(shd_map);
+
+    /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
+    msgctl(msg_queue_id, IPC_RMID, buf);
+    SO_TRIP_NOT_COMPLETED += buf->msg_qbytes;
 }
