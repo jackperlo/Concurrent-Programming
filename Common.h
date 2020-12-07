@@ -14,6 +14,15 @@
 #include <sys/sem.h>
 #include <sys/stat.h>
 
+#ifndef SO_HEIGHT
+#define SO_HEIGHT 10
+#endif
+
+#ifndef SO_WIDTH
+#define SO_WIDTH 10
+#endif
+
+
 #define TEST_ERROR    if (errno) {fprintf(stderr, \
 					   "%s:%d: PID=%5d: Error %d (%s)\n",\
 					   __FILE__,\
@@ -21,9 +30,6 @@
 					   getpid(),\
 					   errno,\
 					   strerror(errno));CLEAN;exit(-1);}
-
-/* variabili di dimensionamento della matrice mappa */ 
-int SO_HEIGHT, SO_WIDTH;
 
 /* puntatore a matrice che determina la mappa in esecuzione */
 int **map; 
@@ -50,5 +56,5 @@ union semun {
 
 union semun sem_arg;
 
-int sem_queue_id = 0;
+int sem_sync_id = 0;
 int sem_cells_id = 0;

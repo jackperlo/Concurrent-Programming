@@ -3,14 +3,17 @@
 #define CLEAN
 
 #define EXIT_FAILURE_CUSTOM -1
-#define LOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
-                    semop(sem_queue_id, s_queue_buff, 1); TEST_ERROR;
 
+#define LOCK_SIGNALS sigprocmask(SIG_BLOCK, &all, NULL);
+#define UNLOCK_SIGNALS sigprocmask(SIG_UNBLOCK, &all, NULL);
+
+#define LOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
+                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 #define UNLOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = 1; s_queue_buff[0].sem_flg = 0; \
-                    semop(sem_queue_id, s_queue_buff, 1); TEST_ERROR;
+                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 
 int x, y, timing = 1, requests = 0, msg_queue_id = 0;
-sigset_t masked; /* maschera per i segnali */ 
+sigset_t masked, all, tipo; /* maschere per i segnali */ 
 mapping *shd_map;
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
@@ -23,6 +26,7 @@ int generate_request();
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 
 int main(int argc, char *argv[]){
+    int sig = SIGQUIT, semval;
     /* controllo sul numero di parametri che il padre gli passa */
     if(argc != 6){ 
         fprintf(stderr, "\n%s: %d. ERRORE PASSAGGIO PARAMETRI.\nAspettati: 4\nRicevuti: %d\n", __FILE__, __LINE__, argc);
@@ -35,36 +39,47 @@ int main(int argc, char *argv[]){
     /* inizializzo i segnali e i relativi handler che andranno a gestirli */
     signal_actions();
 
+    /* attendo che tutti gli altri processi source siano pronti */
+    s_queue_buff[0].sem_num = 1; 
+    s_queue_buff[0].sem_op = -1; 
+    s_queue_buff[0].sem_flg = 0;
+    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+    s_queue_buff[0].sem_num = 1;
+    s_queue_buff[0].sem_op = 0; 
+    s_queue_buff[0].sem_flg = 0;
+    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+
     /* parte un contatore casuale che emetterà una richiesta di taxi */
-    alarm(1+rand()%10);
+    raise(SIGALRM);
     
     /* INIZIO ESECUZIONE DEI SOURCE */
     /* 
     un source rimane sempre in pausa fino a quando l'alarm (di un tempo casuale) scade e risveglia
     il processo che invierà una richiesta di taxi 
-    */
-    while (1)
-    {
-        pause(); /* syscall */
-    }
 
-    return(0);
+    sigwait permette di attendere finche non arriva la SIGQUIT che termina il processo, ma la return dopo sigwait() non deve mai essere raggiunta
+    */
+    sigaddset(&tipo, SIGQUIT);
+    sigwait(&tipo, &sig);
+
+    return(-1);
 }
 
 void init(int argc, char *argv[]){
     char *s;
+    int rand_seed;
 
-    srand(time(NULL)); /* inizializzo il random per i futuri segnali di alarm */
+    sigfillset(&all);
+
     x = atoi(argv[1]); /* coordinata x del processo corrente, passatagli dal master */
     y = atoi(argv[2]); /* coordinata y del processo corrente, passatagli dal master */
-    msg_queue_id = atoi(argv[4]);
-    sem_queue_id = atoi(argv[5]);
 
-    /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
-    s = getenv("SO_HEIGHT");
-    SO_HEIGHT = atoi(s);
-    s = getenv("SO_WIDTH");
-    SO_WIDTH = atoi(s);
+    rand_seed = (x*SO_WIDTH)+y;
+    srand(rand_seed); /* inizializzo il random per i futuri segnali di alarm con un seed univoco per ogni processo */
+
+    msg_queue_id = atoi(argv[4]);
+    sem_sync_id = atoi(argv[5]);
+
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
 		exit(EXIT_FAILURE_CUSTOM);
@@ -109,7 +124,7 @@ void signal_handler(int sig){
         case SIGALRM:
             requests++;
             dprintf(1,"Aggiungo una richiesta in coda! Sono : %d\n", getpid());
-            print_map(0); /* da togliere */
+            generate_request();
             /* prossima richiestra verrà fatta tra timing secondi.. */ 
             timing = 1 + rand() % 10; 
             alarm(timing);
@@ -203,32 +218,31 @@ void print_map(int isTerminal){
 
 int generate_request(){
     int toX, toY, errn, esito; /* coordinate di arrivo della richiesta effettuata da source*/ 
-
-    while (map[toX][toY] == 0)
+    do
     {
         toX = rand() % SO_HEIGHT;
         toY = rand() % SO_WIDTH;
-    }
+    }while(map[toX][toY] == 0);
+
     /* inizializzo i parametri nel buffer */
-    msg_buffer.mtype = (x * SO_WIDTH) + y;
+    msg_buffer.mtype = (x * SO_WIDTH) + y + 1;
     if (msg_buffer.mtype <= 0) {
 		fprintf(stderr, "\n%s: %d. parametro mtype di una coda di messaggi deve essere > 0. Tentato inserimento di: %d\n", __FILE__, __LINE__, ((x * SO_WIDTH) + y));
 		return(-1);
 	}
     sprintf(msg_buffer.mtext, "%d", (toX * SO_WIDTH) + toY);
 
+    LOCK_SIGNALS;
     LOCK_QUEUE;
-
     if(errn = msgsnd(msg_queue_id, &msg_buffer, MSG_LEN, 0)){
         if((esito = check_snd_msg_status(errn)) == -1)
             exit(esito);
     }
-
     UNLOCK_QUEUE;
+    UNLOCK_SIGNALS;
 }
 
 int check_snd_msg_status(int errn){
-
     switch (errno) {
 	case EAGAIN:
 		dprintf(STDERR_FILENO,

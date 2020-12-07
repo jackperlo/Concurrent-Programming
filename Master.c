@@ -47,7 +47,7 @@ int SO_DURATION; /* duarata in secondi del programma. Valore definito nel settin
 int shd_id = 0; /* id della shared memory */
 int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi */
 sigset_t masked; /* maschera per i segnali */ 
-struct msqid_ds *buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
+struct msqid_ds buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
 int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
 mapping *map_struct;
 mapping *shd_map;
@@ -84,10 +84,6 @@ int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock
 int main(int argc, char *argv[]){
     char *s;
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
-    s = getenv("SO_HEIGHT");
-    SO_HEIGHT = atoi(s);
-    s = getenv("SO_WIDTH");
-    SO_WIDTH = atoi(s);
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
 		exit(EXIT_FAILURE);
@@ -204,7 +200,7 @@ void init(){
     init_shd_mem(dim);
 
     /* inizializzo la coda di messaggi che verrà utilizzata dai sources e taxi per scambiarsi informazioni riguardo le richieste. Master la sfrutterà per inserire eventuali richieste derivanti da terminale nella coda */
-    /*init_msg_queue();*/
+    init_msg_queue();
 
     /* inizializzo i semafori per message queue e celle mappa */
     init_sem();
@@ -345,8 +341,8 @@ void source_processes_generator(){
                         source_args[4] = malloc(sizeof((char)msg_queue_id));
                         sprintf(source_args[4], "%d", msg_queue_id);
 
-                        source_args[5] = malloc(sizeof((char)sem_queue_id));
-                        sprintf(source_args[5], "%d", sem_queue_id);
+                        source_args[5] = malloc(sizeof((char)sem_sync_id));
+                        sprintf(source_args[5], "%d", sem_sync_id);
 
                         source_args[6] = NULL;
 
@@ -505,6 +501,11 @@ void execution(){
     signal_actions();
 
     /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
+    dprintf(1, "Attesa Sincronizzazione...\n");
+    s_queue_buff[0].sem_num = 1;
+    s_queue_buff[0].sem_op = 0; 
+    s_queue_buff[0].sem_flg = 0;
+    semop(sem_sync_id, s_queue_buff, 1);
     alarm(1);
     while ((pid = wait(&status)) > 0); /* aspetta che siano terminati tutti i suoi figli */
 
@@ -514,20 +515,29 @@ void execution(){
 }
 
 void signal_actions(){
-    struct sigaction restart; /* nodefer flag, defer flag */
+    struct sigaction restart, abort; 
 
     /* pulisce le struct */
     bzero(&restart, sizeof(restart));
+    bzero(&abort, sizeof(abort));
 
     restart.sa_handler = signal_handler;
+    abort.sa_handler = signal_handler;
 
     restart.sa_flags = SA_RESTART;
 
     sigaddset(&masked, SIGALRM);
+    sigaddset(&masked, SIGCHLD);
+    sigaddset(&masked, SIGINT);
 
     restart.sa_mask = masked;
+    abort.sa_mask = masked;
 
     sigaction(SIGALRM, &restart, NULL);
+    TEST_ERROR;
+    sigaction(SIGCHLD, &restart, NULL);
+    TEST_ERROR;
+    sigaction(SIGINT, &abort, NULL);
     TEST_ERROR;
 }
 
@@ -547,7 +557,13 @@ void signal_handler(int sig){
         /*      kill_taxi();    */
             }
             break;
+        case SIGCHLD:
 
+            break;
+        case SIGINT:
+            kill_sources();
+            alarm(0);
+            break;
         default:
             dprintf(1, "\nSignal %d not handled\n", sig);
             break;
@@ -607,7 +623,7 @@ void init_shd_mem(int dim){
 }
 
 void init_msg_queue(){
-    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | 0600); /* AGGIUNGERE IPC_EXCL */
+    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0666); /* AGGIUNGERE IPC_EXCL */
     TEST_ERROR;
 }
 
@@ -615,19 +631,20 @@ void init_sem(){
     int i, minC, maxC;
 
     /* semaforo message queue */
-    sem_queue_id = semget(IPC_PRIVATE, 1, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
+    sem_sync_id = semget(IPC_PRIVATE, 2, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
     TEST_ERROR;
 
     sem_arg.val = 1;
 
-    semctl(sem_queue_id, 0, SETVAL, sem_arg);
+    semctl(sem_sync_id, 0, SETVAL, sem_arg);
+    TEST_ERROR;
+    sem_arg.val = search_4_exec_param("SO_SOURCES");
+    semctl(sem_sync_id, 1, SETVAL, sem_arg);
     TEST_ERROR;
     
     /* inizializza i semafori delle celle */
     sem_cells_id = semget(IPC_PRIVATE, SO_HEIGHT*SO_WIDTH, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
     TEST_ERROR;
-
-    print_map_specific(SO_CAP,0);
 
     for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
         sem_arg.val = SO_CAP[i%SO_WIDTH][i/SO_WIDTH];
@@ -647,10 +664,16 @@ void cleaner(){
         shmdt(shd_map);
 
     /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
-    /*msgctl(msg_queue_id, IPC_RMID, buf);
-    SO_TRIP_NOT_COMPLETED += buf->msg_qbytes;*/
-    if(sem_queue_id)
-        semctl(sem_queue_id, 0, IPC_RMID);
+    msgctl(msg_queue_id, IPC_STAT, &buf);
+    SO_TRIP_NOT_COMPLETED += buf.msg_qnum;
+    dprintf(1,"Numero trip non completati: %d", SO_TRIP_NOT_COMPLETED);
+    msgctl(msg_queue_id, IPC_RMID, NULL);
+    
+
+    if(sem_sync_id){
+        semctl(sem_sync_id, 0, IPC_RMID);
+        semctl(sem_sync_id, 1, IPC_RMID);
+    }
 
     if(sem_cells_id)
         for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
