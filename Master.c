@@ -1,18 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/sysinfo.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
-#include <errno.h>
-#include <signal.h>
-
-#include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
-#include <sys/shm.h>
-#include <sys/sem.h>
+#include "Common.h"
 
 /*-------------DEFINE di COSTANTI--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
@@ -21,6 +7,8 @@
 /* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
 #define SETTING_PATH "./settings"
 #define NUM_PARAM 9
+
+#define CLEAN cleaner();
 
 /*------------DICHIARAZIONE METODI------------*/
 void init(); /* inizializzazione delle variabili */
@@ -37,7 +25,11 @@ void signal_actions(); /* imposta il signal handler */
 void kill_sources(); /* elimina tutti i figli sources */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
-void map_to_struct(); /* convert map into struct */ 
+void map_to_struct(int dim); /* convert map into struct */ 
+void init_shd_mem(int dim); /* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
+void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
+void cleaner(); /* metodo per pulizia memoria da deallocare */
+void init_sem(); /* inizializza semafori */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -47,15 +39,18 @@ int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta 
 int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 
 /*-------------VARIABILI GLOBALI-------------*/
-int SO_HEIGHT, SO_WIDTH;
-int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
-sigset_t masked;
-int shd_id; /* id della shared memory */
+int shd_id = 0; /* id della shared memory */
+int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi */
+sigset_t masked; /* maschera per i segnali */ 
+struct msqid_ds buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
+int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
+mapping *map_struct;
+mapping *shd_map;
 
 typedef struct{
     int value;
@@ -90,17 +85,12 @@ int SO_TOP_ROAD;  processo che ha fatto più strada
 int SO_TOP_LENGTH;  processo che ha impiegato più tempo in un viaggio 
 int SO_TOP_REQ;  processo che ha completato più request di clienti 
 int SO_TRIP_SUCCESS;  numero di viaggi eseguiti con successo, da stampare a fine dell'esecuzione 
-int SO_TRIP_NOT_COMPLETED;  numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione 
 int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock 
 */
 
 int main(int argc, char *argv[]){
     char *s;
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
-    s = getenv("SO_HEIGHT");
-    SO_HEIGHT = atoi(s);
-    s = getenv("SO_WIDTH");
-    SO_WIDTH = atoi(s);
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
 		exit(EXIT_FAILURE);
@@ -108,16 +98,12 @@ int main(int argc, char *argv[]){
 
     /* CONFIGURAZIONE DELL'ESECUZIONE */
     init();
-    map_generator();
-    source_processes_generator();
-    SO_DURATION = search_4_exec_param("SO_DURATION");
     
     /* START UFFICIALE DELL'ESECUZIONE */
     execution();
     
     /* CONCLUSIONE DELL'ESECUZIONE */
-    free_param_list(listaParametri);
-    free_mat();
+    cleaner();
 
     return 0;
 }
@@ -129,6 +115,7 @@ void init(){
     char name[100];
     int value;
     int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
+    int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) ); /* dimensione allocata per la shd mem */ 
 
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
 
@@ -196,6 +183,9 @@ void init(){
     print_exec_param_list();
 #endif
 
+    SO_CAP_MIN = search_4_exec_param("SO_CAP_MIN");
+    SO_CAP_MAX = search_4_exec_param("SO_CAP_MAX");
+
     for(i = 0; i < SO_HEIGHT; i++){
         for(j = 0; j < SO_WIDTH; j++){
             /* genera la matrice delle capacità per ogni cella, genera un valore casuale tra CAP_MIN e CAP_MAX */
@@ -204,8 +194,26 @@ void init(){
             /* genera la matrice dei tempi di attesa per ogni cella, genera un valore casuale tra TIMENSEC_MIN e TIMENSEC_MAX */
             SO_TIMENSEC[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
         }
-    }    
+    }   
+    SO_DURATION = search_4_exec_param("SO_DURATION"); 
 
+    /* genero la mappa */
+    map_generator();
+
+    /* converte la mappa in una struttura che contiene i valori della matrice */
+    map_to_struct(dim);
+
+    /* inizializzo la shd mem che sfruttero poi dai figli per ricavare la costruzione della matrice */
+    init_shd_mem(dim);
+
+    /* inizializzo la coda di messaggi che verrà utilizzata dai sources e taxi per scambiarsi informazioni riguardo le richieste. Master la sfrutterà per inserire eventuali richieste derivanti da terminale nella coda */
+    init_msg_queue();
+
+    /* inizializzo i semafori per message queue e celle mappa */
+    init_sem();
+
+    /* genero i processi source */
+    source_processes_generator();
 }
 
 void map_generator(){
@@ -250,6 +258,7 @@ void assign_holes_cells(){
 void assign_source_cells(){
     int i, x, y;
     int SO_SOURCES;
+    int esito = 0;
     srand(time(NULL)); /* inizializzo il random number generator */ 
     
     /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo. */
@@ -258,16 +267,24 @@ void assign_source_cells(){
 		exit(EXIT_FAILURE);
     }
 
-    /*dprintf(1,"%d",SO_SOURCES);*/
+    /* dprintf(1,"\nSO_SOURCES estratti da settings: %d", SO_SOURCES); */
     
     for (i = 0; i < SO_SOURCES; i++){
         do{
             x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
             y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */
-            if(map[x][y] != 0) /* se la cella non è inaccessibile */
+            if(map[x][y] == 1){ /* se la cella non è inaccessibile */
                 map[x][y] = 2; /* assegno la cella come SOURCE */
-        }while(map[x][y] != 2); /* finché la cella che sto considerando non viene marcata come sorgente */
+                esito = 1;
+                /* dprintf(1, "\nContenuto di map[%d][%d]=%d", x, y, map[x][y]); */
+            }
+        }while(!esito); /* finché la cella che sto considerando non viene marcata come sorgente */
+        esito = 0;
     }
+
+    /* dprintf(1,"\nMAPPA STAMPATA SUBITO DOPO AVER ASSEGNATO I SOURCES...\n"); 
+    print_map(0);
+    dprintf(1,"\n",SO_SOURCES); */
 }
 
 void print_map(int isTerminal){
@@ -309,10 +326,8 @@ void print_map(int isTerminal){
 }
 
 void source_processes_generator(){
-    int x,y,i,k; 
-    char *source_args[8];
-    char *map_in_a_string;
-    int size_to_alloc;
+    int x,y; 
+    char *source_args[8]; /* argomenti passati ai processi source */
 
     int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) );
     map_struct = (mapping*)malloc(dim);
@@ -351,19 +366,16 @@ void source_processes_generator(){
                         source_args[2] = malloc(sizeof((char)y));
                         sprintf(source_args[2], "%d", y);
 
-                        source_args[3] = malloc(sizeof((char)SO_HEIGHT));
-                        sprintf(source_args[3], "%d", SO_HEIGHT);
+                        source_args[3] = malloc(sizeof((char)shd_id));
+                        sprintf(source_args[3], "%d", shd_id);
 
-                        source_args[4] = malloc(sizeof((char)SO_WIDTH));
-                        sprintf(source_args[4], "%d", SO_WIDTH);
+                        source_args[4] = malloc(sizeof((char)msg_queue_id));
+                        sprintf(source_args[4], "%d", msg_queue_id);
 
-                        source_args[5] = malloc(sizeof((char)shd_id));
-                        sprintf(source_args[5], "%d", shd_id);
+                        source_args[5] = malloc(sizeof((char)sem_sync_id));
+                        sprintf(source_args[5], "%d", sem_sync_id);
 
-                        source_args[6] = malloc(sizeof((char)size_to_alloc));
-                        sprintf(source_args[6], "%d", size_to_alloc);
-
-                        source_args[7] = NULL;
+                        source_args[6] = NULL;
 
                         execvp(SOURCE, source_args);
 
@@ -520,6 +532,11 @@ void execution(){
     signal_actions();
 
     /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
+    dprintf(1, "Attesa Sincronizzazione...\n");
+    s_queue_buff[0].sem_num = 1;
+    s_queue_buff[0].sem_op = 0; 
+    s_queue_buff[0].sem_flg = 0;
+    semop(sem_sync_id, s_queue_buff, 1);
     alarm(1);
     while ((pid = wait(&status)) > 0); /* aspetta che siano terminati tutti i suoi figli */
 
@@ -529,22 +546,30 @@ void execution(){
 }
 
 void signal_actions(){
-    struct sigaction restart; /* nodefer flag, defer flag */
+    struct sigaction restart, abort; 
 
     /* pulisce le struct */
     bzero(&restart, sizeof(restart));
+    bzero(&abort, sizeof(abort));
 
     restart.sa_handler = signal_handler;
+    abort.sa_handler = signal_handler;
 
     restart.sa_flags = SA_RESTART;
 
     sigaddset(&masked, SIGALRM);
+    sigaddset(&masked, SIGCHLD);
+    sigaddset(&masked, SIGINT);
 
     restart.sa_mask = masked;
+    abort.sa_mask = masked;
 
-    if(sigaction(SIGALRM, &restart, NULL)){
-        exit(EXIT_FAILURE);
-    }
+    sigaction(SIGALRM, &restart, NULL);
+    TEST_ERROR;
+    sigaction(SIGCHLD, &restart, NULL);
+    TEST_ERROR;
+    sigaction(SIGINT, &abort, NULL);
+    TEST_ERROR;
 }
 
 void signal_handler(int sig){
@@ -554,7 +579,7 @@ void signal_handler(int sig){
         /* Generazione Richiesta */
         case SIGALRM:
             seconds++;
-            printf("\n\n--------------------------------------\nSecondo: %d\nInvalidi: %d\nTaxi: %d\n", seconds, 5, 5);
+            printf("\n\n--------------------------------------\nSecondo: %d\n", seconds);
             print_map(0);
             if(seconds < SO_DURATION){
                 alarm(1);
@@ -563,7 +588,13 @@ void signal_handler(int sig){
         /*      kill_taxi();    */
             }
             break;
+        case SIGCHLD:
 
+            break;
+        case SIGINT:
+            kill_sources();
+            alarm(0);
+            break;
         default:
             dprintf(1, "\nSignal %d not handled\n", sig);
             break;
@@ -590,43 +621,93 @@ void print_map_specific(int** m, int isTerminal){
     /* cicla per tutti gli elementi della mappa */
     for(i = 0; i < SO_HEIGHT; i++){
         for(k = 0; k < SO_WIDTH; k++){
-            switch (m[i][k])
-            {
-            /* CASO 0: cella invalida, quadratino nero */
-            case 0:
-                printf("|X");
-                break;
-            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
-            case 1:
-                printf("|_");
-                break;
-            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
-            case 2:
-                if(isTerminal)
-                    printf("|Z");
-                else
-                    printf("|_");
-                break;
-            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
-            default:
-                if(isTerminal)
-                    printf("|L");
-                else
-                    printf("E");
-                break;
-            }
+            printf("|%d", m[i][k]);
         }
         /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
         printf("|\n");
     }
 }
 
-void map_to_struct(){
+void map_to_struct(int dim){
     int i, j, ctr = 0;
+
+    map_struct = (mapping*)malloc(dim);
     for(i = 0; i < SO_HEIGHT; i++){
         for(j = 0; j < SO_WIDTH; j++){
             map_struct[ctr].value = map[i][j];
             ctr++;
         }
     }
+}
+
+void init_shd_mem(int dim){
+    /*INIZIALIZZO LA SHARED MEMORY PER MAP */
+    shd_id = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600);
+    TEST_ERROR;
+    
+    shd_map = (mapping *)shmat(shd_id, NULL, 0);
+    TEST_ERROR;
+
+    /* la shd mem verrà deallocata non appena tutti i processi si staccano */
+    shmctl(shd_id, IPC_RMID, NULL);
+    memcpy(shd_map, map_struct, dim);
+}
+
+void init_msg_queue(){
+    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0666); /* AGGIUNGERE IPC_EXCL */
+    TEST_ERROR;
+}
+
+void init_sem(){
+    int i, minC, maxC;
+
+    /* semaforo message queue */
+    sem_sync_id = semget(IPC_PRIVATE, 2, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
+    TEST_ERROR;
+
+    sem_arg.val = 1;
+
+    semctl(sem_sync_id, 0, SETVAL, sem_arg);
+    TEST_ERROR;
+    sem_arg.val = search_4_exec_param("SO_SOURCES");
+    semctl(sem_sync_id, 1, SETVAL, sem_arg);
+    TEST_ERROR;
+    
+    /* inizializza i semafori delle celle */
+    sem_cells_id = semget(IPC_PRIVATE, SO_HEIGHT*SO_WIDTH, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
+    TEST_ERROR;
+
+    for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
+        sem_arg.val = SO_CAP[i%SO_WIDTH][i/SO_WIDTH];
+        semctl(sem_cells_id, i, SETVAL, sem_arg);
+        TEST_ERROR;
+    } 
+}
+
+void cleaner(){
+    int i;
+    /* deallocazione malloc matrici */
+    free_param_list(listaParametri);
+    free_mat();
+
+    /* deallocazione memoria condivisa */
+    if(shd_id)
+        shmdt(shd_map);
+
+    /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
+    msgctl(msg_queue_id, IPC_STAT, &buf);
+    SO_TRIP_NOT_COMPLETED += buf.msg_qnum;
+    dprintf(1,"Numero trip non completati: %d", SO_TRIP_NOT_COMPLETED);
+    msgctl(msg_queue_id, IPC_RMID, NULL);
+    
+
+    if(sem_sync_id){
+        semctl(sem_sync_id, 0, IPC_RMID);
+        semctl(sem_sync_id, 1, IPC_RMID);
+    }
+
+    if(sem_cells_id)
+        for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
+            semctl(sem_cells_id, i, IPC_RMID);
+        } 
 }
