@@ -8,6 +8,7 @@
 #define SETTING_PATH "./settings"
 #define NUM_PARAM 9
 
+/* define richiamata dalla macro TESTERROR definita in common */
 #define CLEAN cleaner();
 
 /*------------DICHIARAZIONE METODI------------*/
@@ -32,6 +33,8 @@ void cleaner(); /* metodo per pulizia memoria da deallocare */
 void init_sem(); /* inizializza semafori */
 void taxi_processes_generator(); /* generazione dei processi taxi */
 void kill_taxis(); /* elimina tutti i figli taxi */
+int select_a_child_to_do_the_request(); /* seleziona il primo figlio che trova dalla matrice che contiene i pid dei figli e lo destina a alzare la richiesta effettuata via SIGUSR1 */
+void signal_sigusr1_actions(); /* gestisce il segnale di richiesta inviato da terminale */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -52,8 +55,9 @@ int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi
 sigset_t masked; /* maschera per i segnali */ 
 struct msqid_ds buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
 int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
-mapping *map_struct;
-mapping *shd_map;
+mapping *map_struct; /* typdef di una struct che contiene il valore di ogni cella della matrice map, mappata in un'array di struct del tipo definito dal typedef */
+mapping *shd_map; /* stesso typdef della riga sopra, serve per allocare il shd mem uno spazio sufficiente a copiare la map_struct in mem condivisa */
+int child_who_does_user_request; /* PID del figlio SO_SOURCE che prenderà in carico la richiesta esplicita da terminale mandata al processo master */
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -61,7 +65,6 @@ typedef struct node {
 	char name[20];
 	struct node * next;  
 } node;
-
 typedef node* param_list; /* conterrà la lista dei parametri passati tramite file di settings */
 param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
 param_list insert_exec_param_into_list(char name[], int value); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
@@ -91,6 +94,10 @@ int main(int argc, char *argv[]){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
 		exit(EXIT_FAILURE);
     }
+
+    /* per lanciare la richiesta da temrinale: kill -SIGUSR1 <Master-PID> */
+    /* stampo il PID del master per essere sfruttato nell'invio del SIGUSR1 */
+    dprintf(1, "\nMASTER PID: %d\n", getpid());
 
     /* CONFIGURAZIONE DELL'ESECUZIONE */
     init();
@@ -376,8 +383,7 @@ void source_processes_generator(){
                     /* caso PROCESSO PADRE */
                     default:
                         break;
-                }
-                
+                } 
             }
         }
     }
@@ -582,7 +588,8 @@ void free_mat(){
 
 void execution(){
     int status, pid;
-    /* associa l'handler dell'alarm */
+
+    /* associo gli handlers */
     signal_actions();
 
     /* faccio un alarm di un secondo per far iniziare il ciclo di stampe ogni secondo */
@@ -591,6 +598,9 @@ void execution(){
     s_queue_buff[0].sem_op = 0; 
     s_queue_buff[0].sem_flg = 0;
     semop(sem_sync_id, s_queue_buff, 1);
+
+    signal_sigusr1_actions(); /* gestisco il segnale SIGUSR1 solo da questo punto in avanti (ovvero quando tutti i processi figli sono pronti all'esecuzione) cosi da poter poi commissionare la richiesta da terminale ad uno di loro */
+    
     alarm(1);
     while ((pid = wait(&status)) > 0); /* aspetta che siano terminati tutti i suoi figli */
 
@@ -600,19 +610,23 @@ void execution(){
 }
 
 void signal_actions(){
+    /* struct per mascherare i segnali con diversi comportamenti */
     struct sigaction restart, abort; 
 
-    /* pulisce le struct */
+    /* pulisce le struct impostando tutti i bytes a 0*/
     bzero(&restart, sizeof(restart));
     bzero(&abort, sizeof(abort));
 
+    /* assegno l'handler ad ogni maschera */
     restart.sa_handler = signal_handler;
     abort.sa_handler = signal_handler;
 
+    /* flags per comportamenti speciali assunti dalla maschera */ 
     restart.sa_flags = SA_RESTART;
+    abort.sa_flags = 0; /* nessun comportamento speciale */
 
+    /* maschera per indicare i segnali bloccati durante l’esecuzione dell’handler */
     sigaddset(&masked, SIGALRM);
-    sigaddset(&masked, SIGCHLD);
     sigaddset(&masked, SIGINT);
 
     restart.sa_mask = masked;
@@ -620,17 +634,28 @@ void signal_actions(){
 
     sigaction(SIGALRM, &restart, NULL);
     TEST_ERROR;
-    sigaction(SIGCHLD, &restart, NULL);
-    TEST_ERROR;
     sigaction(SIGINT, &abort, NULL);
     TEST_ERROR;
 }
 
+void signal_sigusr1_actions(){
+    struct sigaction user_signal;
+    bzero(&user_signal, sizeof(user_signal));
+    user_signal.sa_handler = signal_handler;
+    user_signal.sa_flags = SA_RESTART; /* SIGUSR1 di default action ha term */
+    sigaddset(&masked, SIGUSR1);
+    user_signal.sa_mask = masked;
+
+    sigaction(SIGUSR1, &user_signal, NULL);
+    TEST_ERROR;
+}
+
 void signal_handler(int sig){
+    int ret = -1;
+
     sigprocmask(SIG_BLOCK, &masked, NULL);
     switch (sig)
     {
-        /* Generazione Richiesta */
         case SIGALRM:
             seconds++;
             printf("\n\n--------------------------------------\nSecondo: %d\n", seconds);
@@ -642,18 +667,36 @@ void signal_handler(int sig){
                 kill_taxis();
             }
             break;
-        case SIGCHLD:
-
-            break;
         case SIGINT:
             kill_sources();
             alarm(0);
+            break;
+        /* richiesta esplicita da terminale, fatta dall'utente. Handler associato solo dopo che tutti i processi sono sincronizzati */
+        case SIGUSR1:
+            if((child_who_does_user_request = select_a_child_to_do_the_request())==-1)
+                dprintf(1, "\nErrore sul SIGUSR1: nessun processo figlio ha preso in carico la richiesta. Riprova");
+            else
+                dprintf(1, "\nHO SCELTO IL FIGLIO CON PID:%d\n",child_who_does_user_request);
+                kill(child_who_does_user_request, SIGUSR1);
+                TEST_ERROR;
             break;
         default:
             dprintf(1, "\nSignal %d not handled\n", sig);
             break;
     }
     sigprocmask(SIG_UNBLOCK, &masked, NULL);
+}
+
+int select_a_child_to_do_the_request(){
+    int x=0, y=0, pid=-1;
+
+    while((pid==-1) && (x<SO_WIDTH) && (y<SO_HEIGHT)){
+        if(SO_SOURCES_PID[x][y] != 0) /* matrice che contiene i pid dei figli, il primo che trovo sarà il figlio che alzerà la richiesta aperta via SIGUSR1 */
+            pid=SO_SOURCES_PID[x][y];
+        x++;
+        y++;
+    }
+    return pid;
 }
 
 void kill_sources(){

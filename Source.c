@@ -1,27 +1,33 @@
 #include "Common.h"
 
+/* define richiamata dalla macro TESTERROR definita in common */
 #define CLEAN
 
 #define EXIT_FAILURE_CUSTOM -1
 
+/* blocca e sblocca tutti i segnali */
 #define LOCK_SIGNALS sigprocmask(SIG_BLOCK, &all, NULL);
 #define UNLOCK_SIGNALS sigprocmask(SIG_UNBLOCK, &all, NULL);
 
+/* semaforo di mutua esclusione sulla scrittura in coda di messaggi */
 #define LOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
                     while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 #define UNLOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = 1; s_queue_buff[0].sem_flg = 0; \
                     while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 
-int x, y, timing = 1, requests = 0, msg_queue_id = 0;
+int x, y;
+int timing = 1; /* inizializzazione tempo random dopo cui effettuare la prossima richiesta */
+int requests = 0; /* numero di richieste effettuate da questo sorgente */
+int msg_queue_id = 0; /* id del semaforo per la coda di messaggi */
 sigset_t masked, all, tipo; /* maschere per i segnali */ 
-mapping *shd_map;
+mapping *shd_map; /* matrice sottoforma di array di stuct che contiene il solo valore della cella, allocata in shd mem e passata dal master */
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_map(); /* converte la struttura che contiene i valori della mappa condivisa passata dalla shd mem in una mappa locale (int **map) */
 void init_map(); /* inizializza la mappa locale a source */
-void signal_actions(); /* */ 
-void signal_handler(int sig); /* */
-int generate_request(); 
+void signal_actions(); /* gestione dei segnali */ 
+void signal_handler(int sig); /* handler custom sui segnali gestiti */
+int generate_request();  /* metodo di supporto che genera e inserisce la richiesta nella coda di messaggi, con gestione relativi semafori di mutua esclusione */
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 
 int main(int argc, char *argv[]){
@@ -40,28 +46,24 @@ int main(int argc, char *argv[]){
 
     /* attendo che tutti gli altri processi source siano pronti */
     s_queue_buff[0].sem_num = 1; 
-    s_queue_buff[0].sem_op = -1; 
+    s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
     s_queue_buff[0].sem_flg = 0;
     while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
     s_queue_buff[0].sem_num = 1;
-    s_queue_buff[0].sem_op = 0; 
+    s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
     s_queue_buff[0].sem_flg = 0;
     while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+
+    /* INIZIO ESECUZIONE DEI SOURCE */
 
     /* parte un contatore casuale che emetterà una richiesta di taxi */
     raise(SIGALRM);
     
-    /* INIZIO ESECUZIONE DEI SOURCE */
-    /* 
-    un source rimane sempre in pausa fino a quando l'alarm (di un tempo casuale) scade e risveglia
-    il processo che invierà una richiesta di taxi 
-
-    sigwait permette di attendere finche non arriva la SIGQUIT che termina il processo, ma la return dopo sigwait() non deve mai essere raggiunta
-    */
+    /* continuo finché non mi arriva un segnale che termina l'esecuzione */
     sigaddset(&tipo, SIGQUIT);
     sigwait(&tipo, &sig);
 
-    return(-1);
+    return(-1); /* -1 errore nella chiusura di source, altrimenti restituisce il numero di richieste effettuate */
 }
 
 void init(int argc, char *argv[]){
@@ -93,24 +95,29 @@ void init(int argc, char *argv[]){
 }
 
 void signal_actions(){
-    struct sigaction restart, abort; /* nodefer flag, defer flag */
+    /* struct per mascherare i segnali con diversi comportamenti */
+    struct sigaction restart, abort;
 
-    /* pulisce le struct */
+    /* pulisce le struct impostando tutti i bytes a 0*/
     bzero(&restart, sizeof(restart)); 
     bzero(&abort, sizeof(abort));
 
+    /* assegno l'handler ad ogni maschera */
     restart.sa_handler = signal_handler;
     abort.sa_handler = signal_handler;
 
-    restart.sa_flags = SA_RESTART; /* permette invocazioni innestate dell'handler */
+    /* flags per comportamenti speciali assunti dalla maschera */ 
+    restart.sa_flags = SA_RESTART;
+    abort.sa_flags = 0; /* nessun comportamento speciale */
 
     sigaddset(&masked, SIGALRM);
     sigaddset(&masked, SIGQUIT);
+    sigaddset(&masked, SIGUSR1); /* sfrutto la maschera con flag di restart già usata per il SIGARLM*/
 
     restart.sa_mask = masked;
     abort.sa_mask = masked;
 
-    if(sigaction(SIGALRM, &restart, NULL) || sigaction(SIGQUIT, &abort, NULL)){
+    if(sigaction(SIGALRM, &restart, NULL) || sigaction(SIGQUIT, &abort, NULL) || sigaction(SIGUSR1, &restart, NULL)){
         exit(EXIT_FAILURE_CUSTOM);
     }
 }
@@ -135,6 +142,13 @@ void signal_handler(int sig){
             dprintf(1,"Fine esecuzione processo source!\n"); /* da togliere */ 
             /* RITORNO AL PADRE IL NUMERO DI RICHIESTE CHE HO ESEGUITO */
             exit(requests); 
+            break;
+
+        /* richiesta esplicita da terminale giunta dal processo master (solo il figlio con uno specifico PID scelto dal padre triggererà questo handler) */
+        case SIGUSR1:
+            requests++;
+            dprintf(1,"AGGIUNGO LA RICHIESTA ESPLICITA DA TERMINALE IN CODA! Sono : %d\n", getpid());
+            generate_request();
             break;
 
         default:
@@ -181,7 +195,7 @@ int generate_request(){
     {
         toX = rand() % SO_HEIGHT;
         toY = rand() % SO_WIDTH;
-    }while(map[toX][toY] == 0);
+    }while(map[toX][toY] != 1);
 
     /* inizializzo i parametri nel buffer */
     msg_buffer.mtype = (x * SO_WIDTH) + y + 1;

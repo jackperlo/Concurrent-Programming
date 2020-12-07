@@ -32,7 +32,7 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 					   errno,\
 					   strerror(errno));CLEAN;exit(-1);}
 
-/* struct to map the Map passed from shdmem into a local array */
+/* struct per mappare la Map passata dalla shdmem in un array locale */
 typedef struct{
     int value;
 }mapping; 
@@ -41,8 +41,8 @@ typedef struct{
 /* struttura del buffer della coda di messaggi */
 struct msgbuf msg_buffer;
 
-struct sembuf s_queue_buff[1];
-struct sembuf s_cells_buff[1];
+struct sembuf s_queue_buff[1]; /* [0] mutex per coda di messaggi + [1] contatore(=SO_SOURCES) per sincronizzazione sources */
+struct sembuf s_cells_buff[1]; /* semafori per ogni cella: cosi da sapere quanti taxi ci stanno "fisicamente" in ogni cella */
 
 union semun {
     int val;    /* Value for SETVAL */
@@ -53,5 +53,6 @@ union semun {
 
 union semun sem_arg;
 
-int sem_sync_id = 0; /* id coda di messaggi + sincronizzazione sources */
-int sem_cells_id = 0; /* semafori per ogni cella: cosi da sapere quanti taxi ci stanno in ogni cella */
+/* id dei semafori */
+int sem_sync_id = 0; 
+int sem_cells_id = 0; 
