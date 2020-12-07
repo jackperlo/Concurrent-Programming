@@ -42,6 +42,7 @@ typedef struct{
 struct msgbuf msg_buffer;
 
 struct sembuf s_queue_buff[1];
+struct sembuf s_cells_buff[1];
 
 union semun {
     int val;    /* Value for SETVAL */

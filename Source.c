@@ -18,15 +18,14 @@ mapping *shd_map;
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_map(); /* converte la struttura che contiene i valori della mappa condivisa passata dalla shd mem in una mappa locale (int **map) */
-void init_map(); /* inizializza la mappa locale a source */ 
-void print_map(int isTerminal); /* stampa della mappa */
+void init_map(); /* inizializza la mappa locale a source */
 void signal_actions(); /* */ 
 void signal_handler(int sig); /* */
 int generate_request(); 
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 
 int main(int argc, char *argv[]){
-    int sig = SIGQUIT, semval;
+    int sig = SIGQUIT;
     /* controllo sul numero di parametri che il padre gli passa */
     if(argc != 6){ 
         fprintf(stderr, "\n%s: %d. ERRORE PASSAGGIO PARAMETRI.\nAspettati: 4\nRicevuti: %d\n", __FILE__, __LINE__, argc);
@@ -174,46 +173,6 @@ void struct_to_map(){
         }
     }
     shmdt(shd_map);
-}
-
-/* PER TEST DA CANCELLARE AL TERMINE */
-
-void print_map(int isTerminal){
-    /* indici per ciclare */
-    int i, k;
-    printf("stampa da figlio\n");
-    /* cicla per tutti gli elementi della mappa */
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            switch (map[i][k])
-            {
-            /* CASO 0: cella invalida, quadratino nero */
-            case 0:
-                printf("|X");
-                break;
-            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
-            case 1:
-                printf("|_");
-                break;
-            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
-            case 2:
-                if(isTerminal)
-                    printf("|Z");
-                else
-                    printf("|_");
-                break;
-            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
-            default:
-                if(isTerminal)
-                    printf("|L");
-                else
-                    printf("|%c",(char)map[i][k]);
-                break;
-            }
-        }
-        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("|\n");
-    }
 }
 
 int generate_request(){

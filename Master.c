@@ -30,6 +30,8 @@ void init_shd_mem(int dim); /* metodo d'appoggio che raccoglie l'inizializzazion
 void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
 void cleaner(); /* metodo per pulizia memoria da deallocare */
 void init_sem(); /* inizializza semafori */
+void taxi_processes_generator(); /* generazione dei processi taxi */
+void kill_taxis(); /* elimina tutti i figli taxi */
 
 /*-------------COSTANTI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -42,6 +44,7 @@ int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
+pid_t *SO_TAXIS_PID; /* puntatore a matrice contenente i PID dei processi TAXI nella loro coordinata di riferimento */
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
 int shd_id = 0; /* id della shared memory */
@@ -146,8 +149,9 @@ void init(){
         SO_SOURCES_PID[i] = malloc(SO_WIDTH*sizeof(pid_t));
         if (SO_SOURCES_PID[i] == NULL)
             return;
+        for(j=0; j<SO_WIDTH; j++)
+            SO_SOURCES_PID[i][j] = 0;
     }
-
 
     /*-----------LEGGO I PARAMETRI DI ESECUZIONE-------------*/
     /* inizializzo il random */
@@ -179,6 +183,10 @@ void init(){
     SO_CAP_MIN = search_4_exec_param("SO_CAP_MIN");
     SO_CAP_MAX = search_4_exec_param("SO_CAP_MAX");
 
+    /* inizializzo il vettore contenente i pid dei taxi */
+    SO_TAXI = search_4_exec_param("SO_TAXI");
+    SO_TAXIS_PID = (pid_t *)malloc(SO_TAXI*sizeof(pid_t));
+
     for(i = 0; i < SO_HEIGHT; i++){
         for(j = 0; j < SO_WIDTH; j++){
             /* genera la matrice delle capacità per ogni cella, genera un valore casuale tra CAP_MIN e CAP_MAX */
@@ -207,6 +215,9 @@ void init(){
 
     /* genero i processi source */
     source_processes_generator();
+
+    /* genero i processi taxi */
+    taxi_processes_generator();
 }
 
 void map_generator(){
@@ -295,14 +306,14 @@ void print_map(int isTerminal){
                 break;
             /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
             case 1:
-                printf("|_");
+                printf("|%d", SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                 break;
             /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
                 if(isTerminal)
                     printf("|Z");
                 else
-                    printf("|_");
+                    printf("|%d",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
@@ -368,6 +379,71 @@ void source_processes_generator(){
                 }
                 
             }
+        }
+    }
+}
+
+void taxi_processes_generator(){
+    int i,x,y,valid; 
+    char *taxi_args[8]; /* argomenti passati ai processi taxi */
+
+    /* CREO I PROCESSI */
+    for (i = 0; i < SO_TAXI; i++){
+        valid = 0;
+        do{
+            x = rand() % SO_HEIGHT;
+            y = rand() % SO_WIDTH;
+            if(semctl(sem_cells_id, (x*SO_WIDTH)+y, GETVAL) > 0){
+                s_cells_buff[0].sem_num = 0; s_cells_buff[0].sem_op = -1; s_cells_buff[0].sem_flg = IPC_NOWAIT;
+                if(semop(sem_cells_id, s_cells_buff, 1) == -1){
+                    if(errno != EAGAIN && errno != EINTR){
+                        TEST_ERROR;
+                    }
+                }else
+                    valid = 1;
+                
+            }
+        }while(!valid);
+
+        switch(SO_TAXIS_PID[i] = fork()){
+            case -1:
+                /* errore nella fork */
+                fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
+                exit(EXIT_FAILURE);
+                break;
+            
+            /* caso PROCESSO FIGLIO */ 
+            case 0:
+                taxi_args[0] = malloc(10 * sizeof(char));
+                sprintf(taxi_args[0], "%s", "Taxi");
+
+                taxi_args[1] = malloc(sizeof((char)x));
+                sprintf(taxi_args[1], "%d", x);
+
+                taxi_args[2] = malloc(sizeof((char)y));
+                sprintf(taxi_args[2], "%d", y);
+
+                taxi_args[3] = malloc(sizeof((char)shd_id));
+                sprintf(taxi_args[3], "%d", shd_id);
+
+                taxi_args[4] = malloc(sizeof((char)msg_queue_id));
+                sprintf(taxi_args[4], "%d", msg_queue_id);
+
+                taxi_args[5] = malloc(sizeof((char)sem_sync_id));
+                sprintf(taxi_args[5], "%d", sem_sync_id);
+
+                taxi_args[6] = NULL;
+
+                execvp(TAXI, taxi_args);
+
+                /* ERRORE ESECUZIONE DELLA EXECVP */
+                fprintf(stderr, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+                exit(EXIT_FAILURE);
+                break;
+            
+            /* caso PROCESSO PADRE */
+            default:
+                break;
         }
     }
 }
@@ -563,7 +639,7 @@ void signal_handler(int sig){
                 alarm(1);
             }else{
                 kill_sources();
-        /*      kill_taxi();    */
+                kill_taxis();
             }
             break;
         case SIGCHLD:
@@ -588,6 +664,15 @@ void kill_sources(){
             if(SO_SOURCES_PID[i][j] > 0)
                 kill(SO_SOURCES_PID[i][j], SIGQUIT);
         }
+    }
+}
+
+void kill_taxis(){
+    int i,j;
+
+    for(i=0; i<SO_TAXI; i++){
+        if(SO_TAXIS_PID[i] > 0)
+            kill(SO_TAXIS_PID[i], SIGQUIT);
     }
 }
 
@@ -656,7 +741,7 @@ void init_sem(){
     TEST_ERROR;
 
     for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
-        sem_arg.val = SO_CAP[i%SO_WIDTH][i/SO_WIDTH];
+        sem_arg.val = SO_CAP[i/SO_WIDTH][i%SO_WIDTH];
         semctl(sem_cells_id, i, SETVAL, sem_arg);
         TEST_ERROR;
     } 
