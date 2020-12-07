@@ -251,6 +251,7 @@ void assign_holes_cells(){
 void assign_source_cells(){
     int i, x, y;
     int SO_SOURCES;
+    int esito = 0;
     srand(time(NULL)); /* inizializzo il random number generator */ 
     
     /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo. */
@@ -259,16 +260,24 @@ void assign_source_cells(){
 		exit(EXIT_FAILURE);
     }
 
-    /*dprintf(1,"%d",SO_SOURCES);*/
+    /* dprintf(1,"\nSO_SOURCES estratti da settings: %d", SO_SOURCES); */
     
     for (i = 0; i < SO_SOURCES; i++){
         do{
             x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
             y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */
-            if(map[x][y] != 0) /* se la cella non è inaccessibile */
+            if(map[x][y] == 1){ /* se la cella non è inaccessibile */
                 map[x][y] = 2; /* assegno la cella come SOURCE */
-        }while(map[x][y] != 2); /* finché la cella che sto considerando non viene marcata come sorgente */
+                esito = 1;
+                /* dprintf(1, "\nContenuto di map[%d][%d]=%d", x, y, map[x][y]); */
+            }
+        }while(!esito); /* finché la cella che sto considerando non viene marcata come sorgente */
+        esito = 0;
     }
+
+    /* dprintf(1,"\nMAPPA STAMPATA SUBITO DOPO AVER ASSEGNATO I SOURCES...\n"); 
+    print_map(0);
+    dprintf(1,"\n",SO_SOURCES); */
 }
 
 void print_map(int isTerminal){

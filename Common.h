@@ -22,6 +22,7 @@
 #define SO_WIDTH 10
 #endif
 
+int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 
 #define TEST_ERROR    if (errno) {fprintf(stderr, \
 					   "%s:%d: PID=%5d: Error %d (%s)\n",\
@@ -30,10 +31,6 @@
 					   getpid(),\
 					   errno,\
 					   strerror(errno));CLEAN;exit(-1);}
-
-/* puntatore a matrice che determina la mappa in esecuzione */
-int **map; 
-
 
 /* struct to map the Map passed from shdmem into a local array */
 typedef struct{
@@ -51,10 +48,9 @@ union semun {
     struct semid_ds *buf;    /* Buffer for IPC_STAT, IPC_SET */
     unsigned short  *array;  /* Array for GETALL, SETALL */
     struct seminfo  *__buf;  /* Buffer for IPC_INFO*/
-
 };
 
 union semun sem_arg;
 
-int sem_sync_id = 0;
-int sem_cells_id = 0;
+int sem_sync_id = 0; /* id coda di messaggi + sincronizzazione sources */
+int sem_cells_id = 0; /* semafori per ogni cella: cosi da sapere quanti taxi ci stanno in ogni cella */
