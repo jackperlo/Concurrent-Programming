@@ -19,8 +19,8 @@ int x, y;
 int timing = 1; /* inizializzazione tempo random dopo cui effettuare la prossima richiesta */
 int requests = 0; /* numero di richieste effettuate da questo sorgente */
 int msg_queue_id = 0; /* id del semaforo per la coda di messaggi */
-sigset_t masked, all, tipo; /* maschere per i segnali */ 
-mapping *shd_map; /* matrice sottoforma di array di stuct che contiene il solo valore della cella, allocata in shd mem e passata dal master */
+sigset_t masked, all; /* maschere per i segnali */ 
+values_to_source *shd_map; /* matrice sottoforma di array di stuct che contiene il solo valore della cella, allocata in shd mem e passata dal master */
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_map(); /* converte la struttura che contiene i valori della mappa condivisa passata dalla shd mem in una mappa locale (int **map) */
@@ -29,12 +29,12 @@ void signal_actions(); /* gestione dei segnali */
 void signal_handler(int sig); /* handler custom sui segnali gestiti */
 int generate_request();  /* metodo di supporto che genera e inserisce la richiesta nella coda di messaggi, con gestione relativi semafori di mutua esclusione */
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
+void free_mat(); /* libero lo spazio allocato per la matrice map locale */
 
 int main(int argc, char *argv[]){
-    int sig = SIGQUIT;
     /* controllo sul numero di parametri che il padre gli passa */
     if(argc != 6){ 
-        fprintf(stderr, "\n%s: %d. ERRORE PASSAGGIO PARAMETRI.\nAspettati: 4\nRicevuti: %d\n", __FILE__, __LINE__, argc);
+        fprintf(stderr, "\n%s: %d. ERRORE PASSAGGIO PARAMETRI.\nAspettati: 6\nRicevuti: %d\n", __FILE__, __LINE__, argc);
 		exit(EXIT_FAILURE_CUSTOM);
     }
 
@@ -60,14 +60,15 @@ int main(int argc, char *argv[]){
     raise(SIGALRM);
     
     /* continuo finché non mi arriva un segnale che termina l'esecuzione */
-    sigaddset(&tipo, SIGQUIT);
-    sigwait(&tipo, &sig);
+    while (1)
+    {
+        pause();
+    }
 
     return(-1); /* -1 errore nella chiusura di source, altrimenti restituisce il numero di richieste effettuate */
 }
 
 void init(int argc, char *argv[]){
-    char *s;
     int rand_seed;
 
     sigfillset(&all);
@@ -87,8 +88,8 @@ void init(int argc, char *argv[]){
     }
 
     /* attacco source alla shd mem aperta dal padre */
-    shd_map = (mapping*)shmat(atoi(argv[3]), NULL, 0);
-    if(shd_map == (mapping*)(-1))
+    shd_map = (values_to_source *)shmat(atoi(argv[3]), NULL, 0);
+    if(shd_map == (values_to_source *)(-1))
         fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
 
     init_map();
@@ -141,6 +142,7 @@ void signal_handler(int sig){
             alarm(0); /* RESET DELL'ALARM. Cosi non si genererà più la richiesta che stava avanzando dalla chiamata all'ultimo alarm */
             dprintf(1,"Fine esecuzione processo source!\n"); /* da togliere */ 
             /* RITORNO AL PADRE IL NUMERO DI RICHIESTE CHE HO ESEGUITO */
+            free_mat();
             exit(requests); 
             break;
 
@@ -182,7 +184,7 @@ void struct_to_map(){
     int i, k, cnt=0;
     for (i = 0; i < SO_HEIGHT; i++){
         for(k= 0; k < SO_WIDTH; k++){
-            map[i][k] = shd_map[cnt].value; 
+            map[i][k] = shd_map[cnt].cell_map_value; 
             cnt++;
         }
     }
@@ -213,6 +215,16 @@ int generate_request(){
     }
     UNLOCK_QUEUE;
     UNLOCK_SIGNALS;
+}
+
+void free_mat(){
+    int i;
+    int *currentIntPtr;
+    /* free map 2d array */
+    for (i = 0; i < SO_HEIGHT; i++){
+        currentIntPtr = map[i];
+        free(currentIntPtr);
+    }
 }
 
 int check_snd_msg_status(int errn){

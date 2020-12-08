@@ -1,14 +1,14 @@
 #include "Common.h"
 
-/*-------------DEFINE di COSTANTI--------------*/
+/*-------------DEFINE di COSTANTI o MACRO--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
 #define TAXI "./Taxi"
 #define SOURCE "./Source"  
 /* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
 #define SETTING_PATH "./settings"
-#define NUM_PARAM 9
+#define NUM_PARAM 10
 
-/* define richiamata dalla macro TESTERROR definita in common */
+/* define richiamata dalla macro TESTERROR definita in common*/
 #define CLEAN cleaner();
 
 /*------------DICHIARAZIONE METODI------------*/
@@ -20,44 +20,57 @@ void assign_source_cells(); /* metodo di supporto a map_generator(), assegna le 
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void source_processes_generator(); /* fork dei processi sorgenti */
+void taxi_processes_generator(); /* fork  dei processi taxi */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
 void signal_actions(); /* imposta il signal handler */
-void kill_sources(); /* elimina tutti i figli sources */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
-void map_to_struct(int dim); /* convert map into struct */ 
-void init_shd_mem(int dim); /* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
 void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
 void cleaner(); /* metodo per pulizia memoria da deallocare */
 void init_sem(); /* inizializza semafori */
-void taxi_processes_generator(); /* generazione dei processi taxi */
-void kill_taxis(); /* elimina tutti i figli taxi */
+void kill_all_children(); /* elimina tutti i figli */
 int select_a_child_to_do_the_request(); /* seleziona il primo figlio che trova dalla matrice che contiene i pid dei figli e lo destina a alzare la richiesta effettuata via SIGUSR1 */
 void signal_sigusr1_actions(); /* gestisce il segnale di richiesta inviato da terminale */
+/* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
+/* isTaxi: 1 => inizializza la shd mem per i taxi */
+/* isTaxi: 0 => viceversa */
+void init_shd_mem(int dim, int isTaxi); 
+/* extended_mapping: 0 => convert MAP in struct */
+/* extended_mapping: 1 => converte MAP, SO_TIMENSEC_MAP, SO_TOP_CELLS_MAP in una struttura che contiene i rispettivi valori divisi per mappa e per cella*/
+void maps_to_struct(int dim, int extended_mapping); 
 
-/*-------------COSTANTI GLOBALI-------------*/
+/*-------------VARIABILI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
 int SO_CAP_MIN; /* capacità minima assumibile da SO_CAP: determina il minimo numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
 int SO_CAP_MAX; /* capacità massima assumibile da SO_CAP: determina il MASSIMO numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
 int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
-
-/*-------------VARIABILI GLOBALI-------------*/
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
-int **SO_TIMENSEC; /* puntatore a matrice dei tempi di attesa per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
-pid_t *SO_TAXIS_PID; /* puntatore a matrice contenente i PID dei processi TAXI nella loro coordinata di riferimento */
+pid_t *SO_TAXIS_PID; /* puntatore ad array contenente i PID dei processi TAXI */
 int seconds = 0; /* contiene i secondi da cui il programma è in esecuzionee */
 int SO_DURATION; /* duarata in secondi del programma. Valore definito nel setting */
-int shd_id = 0; /* id della shared memory */
+int shd_id_values_to_source = 0; /* id della shared memory usata dal master coi sources */
+int shd_id_values_to_taxi = 0; /* id della shared memory usata dal master coi taxi */
+int shd_id_ret_from_taxi = 0; /* id della shareed memory con i valori di ritorno da ogni taxi */
 int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi */
 sigset_t masked; /* maschera per i segnali */ 
 struct msqid_ds buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
 int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
-mapping *map_struct; /* typdef di una struct che contiene il valore di ogni cella della matrice map, mappata in un'array di struct del tipo definito dal typedef */
-mapping *shd_map; /* stesso typdef della riga sopra, serve per allocare il shd mem uno spazio sufficiente a copiare la map_struct in mem condivisa */
+values_to_source *aus_shd_mem_values_to_source; /* typdef di una struct che contiene il valore di ogni cella della matrice map, mappata in un'array di struct del tipo definito dal typedef */
+values_to_source *shd_mem_values_to_source; /* stesso typdef della riga sopra, serve per allocare il shd mem uno spazio sufficiente a copiare la map_struct in mem condivisa */
+values_to_taxi *aus_shd_mem_values_to_taxi; /* puntatore a struttura che contiene i valori delle due matrici in un'unica struttura */
+values_to_taxi *shd_mem_values_to_taxi; /* serve per allocare il shd mem uno spazio sufficiente a copiare le maps_struct in mem cond */
+taxi_returned_values *shd_mem_taxi_returned_values; /* puntatore a struttura che contiene i 3 parametri da ritornare al master da parte dei */ 
 int child_who_does_user_request; /* PID del figlio SO_SOURCE che prenderà in carico la richiesta esplicita da terminale mandata al processo master */
+int SO_TOP_CELLS; /* numero di top_cells da stampare */
+int SO_TIMEOUT; /* numero di secondi dopo i quali il processo taxi viene abortito */
+int SO_TOP_ROAD; /* processo che ha fatto più strada in numero di celle attraversate */
+int SO_TOP_LENGTH; /* processo che ha impiegato più tempo(in nsec) in un viaggio */
+int SO_TOP_REQ; /* processo che ha completato più request di clienti */
+int SO_TRIP_SUCCESS; /* numero di viaggi totali eseguiti con successo, da stampare a fine dell'esecuzione */
+int SO_TRIP_ABORTED; /* numero di viaggi totali abortiti a causa del deadlock di un qualche taxi */
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -73,20 +86,6 @@ int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 
-/*
--------------elenco dei parametri d'esecuzione e loro descrizione------------------
-int SO_HOLES;  indica il numero di celle inaccessibili(da cui holes) all'interno della matrice
-int SO_SOURCES;  indica il numero di celle sorgenti di possibili richieste. Come fossero le stazioni di servizio per i taxi 
-int SO_TIMEOUT;  numero di secondi dopo i quali il processo viene abortito 
-int SO_DURATION;  durata dell'esecuzione in secondi 
-int SO_TOP_CELLS;  numero di celle più attraversate (es. 4 -> riferisco le prime 4 più attraversate) 
-int SO_TOP_ROAD;  processo che ha fatto più strada 
-int SO_TOP_LENGTH;  processo che ha impiegato più tempo in un viaggio 
-int SO_TOP_REQ;  processo che ha completato più request di clienti 
-int SO_TRIP_SUCCESS;  numero di viaggi eseguiti con successo, da stampare a fine dell'esecuzione 
-int SO_TRIP_ABORTED;  numero di viaggi abortiti a causa del deadlock 
-*/
-
 int main(int argc, char *argv[]){
     char *s;
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
@@ -97,7 +96,7 @@ int main(int argc, char *argv[]){
 
     /* per lanciare la richiesta da temrinale: kill -SIGUSR1 <Master-PID> */
     /* stampo il PID del master per essere sfruttato nell'invio del SIGUSR1 */
-    dprintf(1, "\nMASTER PID: %d\n", getpid());
+    dprintf(1, "\nMASTER PROCESS NAME: %d\n", getpid());
 
     /* CONFIGURAZIONE DELL'ESECUZIONE */
     init();
@@ -118,7 +117,8 @@ void init(){
     char name[100];
     int value;
     int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
-    int dim = ( (SO_WIDTH*SO_HEIGHT) * sizeof(mapping) * (sizeof(int)) ); /* dimensione allocata per la shd mem */ 
+    
+    int n_top_cells = -1; /* definisce la dimensione dell'array che contiene le n_top_cells più attraversate */
 
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
 
@@ -140,12 +140,12 @@ void init(){
             return;
     }
 
-    SO_TIMENSEC = (int **)malloc(SO_HEIGHT*sizeof(int *));
-    if (SO_TIMENSEC == NULL)
+    SO_TIMENSEC_MAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (SO_TIMENSEC_MAP == NULL)
         return;
     for (i=0; i<SO_HEIGHT; i++){
-        SO_TIMENSEC[i] = malloc(SO_WIDTH*sizeof(int));
-        if (SO_TIMENSEC[i] == NULL)
+        SO_TIMENSEC_MAP[i] = malloc(SO_WIDTH*sizeof(int));
+        if (SO_TIMENSEC_MAP[i] == NULL)
             return;
     }
 
@@ -190,6 +190,24 @@ void init(){
     SO_CAP_MIN = search_4_exec_param("SO_CAP_MIN");
     SO_CAP_MAX = search_4_exec_param("SO_CAP_MAX");
 
+    SO_TIMENSEC_MIN = search_4_exec_param("SO_TIMENSEC_MIN");
+    SO_TIMENSEC_MAX = search_4_exec_param("SO_TIMENSEC_MAX");
+
+    /* matrice che conterrà il numero di volte in cui ogni cella è stata attraversata. Inizializzata a 0. */
+    SO_TOP_CELLS = search_4_exec_param("SO_TOP_CELLS");
+    SO_TOP_CELLS_MAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    if (SO_TOP_CELLS_MAP == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        SO_TOP_CELLS_MAP[i] = malloc(SO_WIDTH*sizeof(int));
+        if (SO_TOP_CELLS_MAP[i] == NULL)
+            return;
+        for(j=0; j<SO_WIDTH; j++)
+            SO_TOP_CELLS_MAP[i][j] = 0;
+    }
+
+    SO_TIMEOUT = search_4_exec_param("SO_TIMEOUT");
+
     /* inizializzo il vettore contenente i pid dei taxi */
     SO_TAXI = search_4_exec_param("SO_TAXI");
     SO_TAXIS_PID = (pid_t *)malloc(SO_TAXI*sizeof(pid_t));
@@ -200,19 +218,23 @@ void init(){
             SO_CAP[i][j] = SO_CAP_MIN + rand() % (SO_CAP_MAX - (SO_CAP_MIN - 1));
 
             /* genera la matrice dei tempi di attesa per ogni cella, genera un valore casuale tra TIMENSEC_MIN e TIMENSEC_MAX */
-            SO_TIMENSEC[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
+            SO_TIMENSEC_MAP[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
         }
     }   
+
     SO_DURATION = search_4_exec_param("SO_DURATION"); 
 
     /* genero la mappa */
     map_generator();
 
-    /* converte la mappa in una struttura che contiene i valori della matrice */
-    map_to_struct(dim);
+    /* inizializzo la shd mem che sfruttero poi dai source per ricavare la costruzione della matrice */
+    init_shd_mem( ((SO_WIDTH*SO_HEIGHT) * sizeof(values_to_source)), VALUES_TO_SOURCE);
 
-    /* inizializzo la shd mem che sfruttero poi dai figli per ricavare la costruzione della matrice */
-    init_shd_mem(dim);
+    /* inizializzo la shd mem che sfruttero poi dai taxi per ricavare la forma della mappa di gioco e la matrice dei tempi di attraversamento per ogni cella*/
+    init_shd_mem( ((SO_WIDTH*SO_HEIGHT) * sizeof(values_to_taxi)), VALUES_TO_TAXI);
+
+    /* inizializzo la shd mem in cui i taxi scrivono le loro statistiche; "ritornata" al padre alla loro morte */
+    init_shd_mem( ((3+(SO_WIDTH*SO_HEIGHT)) * sizeof(taxi_returned_values)), TAXI_RETURNED_VALUES);
 
     /* inizializzo la coda di messaggi che verrà utilizzata dai sources e taxi per scambiarsi informazioni riguardo le richieste. Master la sfrutterà per inserire eventuali richieste derivanti da terminale nella coda */
     init_msg_queue();
@@ -313,14 +335,21 @@ void print_map(int isTerminal){
                 break;
             /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
             case 1:
-                printf("|%d", SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
+                        printf("|%d",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                    else
+                        printf("|_");
                 break;
             /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
                 if(isTerminal)
                     printf("|Z");
                 else
-                    printf("|%d",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                    if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
+                        printf("|%d",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                    else
+                        printf("|_");
+            
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
@@ -353,7 +382,7 @@ void source_processes_generator(){
                     
                     /* caso PROCESSO FIGLIO */ 
                     case 0:
-                        source_args[0] = malloc(10 * sizeof(char));
+                        source_args[0] = malloc(7 * sizeof(char));
                         sprintf(source_args[0], "%s", "Source");
 
                         source_args[1] = malloc(sizeof((char)x));
@@ -362,8 +391,8 @@ void source_processes_generator(){
                         source_args[2] = malloc(sizeof((char)y));
                         sprintf(source_args[2], "%d", y);
 
-                        source_args[3] = malloc(sizeof((char)shd_id));
-                        sprintf(source_args[3], "%d", shd_id);
+                        source_args[3] = malloc(sizeof((char)shd_id_values_to_source));
+                        sprintf(source_args[3], "%d", shd_id_values_to_source);
 
                         source_args[4] = malloc(sizeof((char)msg_queue_id));
                         sprintf(source_args[4], "%d", msg_queue_id);
@@ -391,7 +420,7 @@ void source_processes_generator(){
 
 void taxi_processes_generator(){
     int i,x,y,valid; 
-    char *taxi_args[8]; /* argomenti passati ai processi taxi */
+    char *taxi_args[9]; /* argomenti passati ai processi taxi */
 
     /* CREO I PROCESSI */
     for (i = 0; i < SO_TAXI; i++){
@@ -399,8 +428,10 @@ void taxi_processes_generator(){
         do{
             x = rand() % SO_HEIGHT;
             y = rand() % SO_WIDTH;
-            if(semctl(sem_cells_id, (x*SO_WIDTH)+y, GETVAL) > 0){
-                s_cells_buff[0].sem_num = 0; s_cells_buff[0].sem_op = -1; s_cells_buff[0].sem_flg = IPC_NOWAIT;
+            if(semctl(sem_cells_id, (x*SO_WIDTH)+y, GETVAL) > 0){ /* semaforo di indice (x*SO_WIDTH)+y contiene un valore > 0*/
+                s_cells_buff[0].sem_num = 0; 
+                s_cells_buff[0].sem_op = -1; 
+                s_cells_buff[0].sem_flg = IPC_NOWAIT;
                 if(semop(sem_cells_id, s_cells_buff, 1) == -1){
                     if(errno != EAGAIN && errno != EINTR){
                         TEST_ERROR;
@@ -420,7 +451,7 @@ void taxi_processes_generator(){
             
             /* caso PROCESSO FIGLIO */ 
             case 0:
-                taxi_args[0] = malloc(10 * sizeof(char));
+                taxi_args[0] = malloc(5 * sizeof(char));
                 sprintf(taxi_args[0], "%s", "Taxi");
 
                 taxi_args[1] = malloc(sizeof((char)x));
@@ -429,8 +460,8 @@ void taxi_processes_generator(){
                 taxi_args[2] = malloc(sizeof((char)y));
                 sprintf(taxi_args[2], "%d", y);
 
-                taxi_args[3] = malloc(sizeof((char)shd_id));
-                sprintf(taxi_args[3], "%d", shd_id);
+                taxi_args[3] = malloc(sizeof((char)shd_id_values_to_taxi));
+                sprintf(taxi_args[3], "%d", shd_id_values_to_taxi);
 
                 taxi_args[4] = malloc(sizeof((char)msg_queue_id));
                 sprintf(taxi_args[4], "%d", msg_queue_id);
@@ -438,7 +469,13 @@ void taxi_processes_generator(){
                 taxi_args[5] = malloc(sizeof((char)sem_sync_id));
                 sprintf(taxi_args[5], "%d", sem_sync_id);
 
-                taxi_args[6] = NULL;
+                taxi_args[6] = malloc(sizeof((char)SO_TIMEOUT));
+                sprintf(taxi_args[6], "%d", SO_TIMEOUT);
+
+                taxi_args[7] = malloc(sizeof((char)shd_id_ret_from_taxi));
+                sprintf(taxi_args[7], "%d", shd_id_ret_from_taxi);
+
+                taxi_args[8] = NULL;
 
                 execvp(TAXI, taxi_args);
 
@@ -578,12 +615,17 @@ void free_mat(){
         currentIntPtr = SO_CAP[i];
         free(currentIntPtr);
 
-        currentIntPtr = SO_TIMENSEC[i];
+        currentIntPtr = SO_TIMENSEC_MAP[i];
         free(currentIntPtr);
 
         currentIntPtr = SO_SOURCES_PID[i];
         free(currentIntPtr);
+
+        currentIntPtr = SO_TOP_CELLS_MAP[i];
+        free(currentIntPtr);
     }
+    free(aus_shd_mem_values_to_source);
+    free(aus_shd_mem_values_to_taxi);
 }
 
 void execution(){
@@ -663,12 +705,11 @@ void signal_handler(int sig){
             if(seconds < SO_DURATION){
                 alarm(1);
             }else{
-                kill_sources();
-                kill_taxis();
+                kill_all_children();
             }
             break;
         case SIGINT:
-            kill_sources();
+            kill_all_children();
             alarm(0);
             break;
         /* richiesta esplicita da terminale, fatta dall'utente. Handler associato solo dopo che tutti i processi sono sincronizzati */
@@ -699,7 +740,7 @@ int select_a_child_to_do_the_request(){
     return pid;
 }
 
-void kill_sources(){
+void kill_all_children(){
     int i,j;
 
     for(i=0; i<SO_HEIGHT; i++){
@@ -708,11 +749,6 @@ void kill_sources(){
                 kill(SO_SOURCES_PID[i][j], SIGQUIT);
         }
     }
-}
-
-void kill_taxis(){
-    int i,j;
-
     for(i=0; i<SO_TAXI; i++){
         if(SO_TAXIS_PID[i] > 0)
             kill(SO_TAXIS_PID[i], SIGQUIT);
@@ -734,33 +770,78 @@ void print_map_specific(int** m, int isTerminal){
     }
 }
 
-void map_to_struct(int dim){
+void maps_to_struct(int dim, int extended_mapping){
     int i, j, ctr = 0;
 
-    map_struct = (mapping*)malloc(dim);
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(j = 0; j < SO_WIDTH; j++){
-            map_struct[ctr].value = map[i][j];
-            ctr++;
+    if(extended_mapping == VALUES_TO_SOURCE){
+        aus_shd_mem_values_to_source = (values_to_source*)malloc(dim);
+        for(i = 0; i < SO_HEIGHT; i++){
+            for(j = 0; j < SO_WIDTH; j++){
+                aus_shd_mem_values_to_source[ctr].cell_map_value = map[i][j];
+                ctr++;
+            }
         }
+    }else{
+        aus_shd_mem_values_to_taxi = (values_to_taxi*)malloc(dim);
+        for(i = 0; i < SO_HEIGHT; i++){
+            for(j = 0; j < SO_WIDTH; j++){
+                aus_shd_mem_values_to_taxi[ctr].cell_map_value = map[i][j];
+                aus_shd_mem_values_to_taxi[ctr].cell_timensec_map_value = SO_TIMENSEC_MAP[i][j];
+                ctr++;
+            }
+        }
+    }
+    
+}
+
+void init_shd_mem(int dim, int what_to_init){
+    int i=0;
+    if(what_to_init == VALUES_TO_SOURCE){
+        /* converte la mappa in una struttura che contiene i valori della matrice */
+        maps_to_struct(dim, what_to_init);
+
+        /*INIZIALIZZO LA SHARED MEMORY PER I SOURCE */
+        shd_id_values_to_source = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600);
+        TEST_ERROR;
+        
+        shd_mem_values_to_source = (values_to_source *)shmat(shd_id_values_to_source, NULL, 0);
+        TEST_ERROR;
+
+        /* la shd mem verrà deallocata non appena tutti i processi si staccano */
+        shmctl(shd_id_values_to_source, IPC_RMID, NULL);
+        memcpy(shd_mem_values_to_source, aus_shd_mem_values_to_source, dim);
+    }else if(what_to_init == VALUES_TO_TAXI){
+        /* converte la mappa in una struttura che contiene i valori della matrice */
+        maps_to_struct(dim, what_to_init);
+
+        /*INIZIALIZZO LA SHARED MEMORY PER I TAXI */
+        shd_id_values_to_taxi = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600); 
+        TEST_ERROR;
+
+        shd_mem_values_to_taxi = (values_to_taxi *)shmat(shd_id_values_to_taxi, NULL, 0);
+        TEST_ERROR;
+
+        /* la shd mem verrà deallocata non appena tutti i processi si staccano */
+        shmctl(shd_id_values_to_taxi, IPC_RMID, NULL);
+        memcpy(shd_mem_values_to_taxi, aus_shd_mem_values_to_taxi, dim);   
+    }else{
+        /*INIZIALIZZO LA SHARED MEMORY PER I TAXI */
+        shd_id_ret_from_taxi = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600); 
+        TEST_ERROR;
+
+        shd_mem_taxi_returned_values = (taxi_returned_values *)shmat(shd_id_ret_from_taxi, NULL, 0);
+        TEST_ERROR;
+
+        /* pulisce la shared memory: setta dim bytes a 0 */
+        bzero(shd_mem_taxi_returned_values, dim);
+
+        /* la shd mem verrà deallocata non appena tutti i processi si staccano */
+        shmctl(shd_id_ret_from_taxi, IPC_RMID, NULL);
     }
 }
 
-void init_shd_mem(int dim){
-    /*INIZIALIZZO LA SHARED MEMORY PER MAP */
-    shd_id = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600);
-    TEST_ERROR;
-    
-    shd_map = (mapping *)shmat(shd_id, NULL, 0);
-    TEST_ERROR;
-
-    /* la shd mem verrà deallocata non appena tutti i processi si staccano */
-    shmctl(shd_id, IPC_RMID, NULL);
-    memcpy(shd_map, map_struct, dim);
-}
-
 void init_msg_queue(){
-    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0666); /* AGGIUNGERE IPC_EXCL */
+    msg_queue_id = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0666);
     TEST_ERROR;
 }
 
@@ -797,8 +878,10 @@ void cleaner(){
     free_mat();
 
     /* deallocazione memoria condivisa */
-    if(shd_id)
-        shmdt(shd_map);
+    if(shd_id_values_to_source)
+        shmdt(shd_mem_values_to_source);
+    if(shd_id_values_to_taxi)
+        shmdt(shd_mem_values_to_taxi);
 
     /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
     msgctl(msg_queue_id, IPC_STAT, &buf);

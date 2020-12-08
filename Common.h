@@ -22,7 +22,13 @@
 #define SO_WIDTH 10
 #endif
 
+#define VALUES_TO_SOURCE 0
+#define VALUES_TO_TAXI 1
+#define TAXI_RETURNED_VALUES 2
+
 int **map; /* puntatore a matrice che determina la mappa in esecuzione */
+int **SO_TIMENSEC_MAP; /* puntatore a matrice dei tempi di attesa per ogni cella */
+int **SO_TOP_CELLS_MAP; /* matrice che contiene per ogni cella il numero di volte in cui la cella è stata attraversata */
 
 #define TEST_ERROR    if (errno) {fprintf(stderr, \
 					   "%s:%d: PID=%5d: Error %d (%s)\n",\
@@ -34,8 +40,21 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 
 /* struct per mappare la Map passata dalla shdmem in un array locale */
 typedef struct{
-    int value;
-}mapping; 
+    int cell_map_value; /* mapping della matrice map: contiene i valori di ogni cella della matrice */
+}values_to_source;
+
+/* struct per passare con una shared mem due matrici (che sono essenziali per l'esecuzione dei taxi) dal master ai taxi*/
+typedef struct{
+	int cell_map_value; /* mapping della matrice map: contiene i valori di ogni cella della matrice */ 
+	int cell_timensec_map_value; /* mapping della matrice SO_TIMENSEC_MAP che contiene il tempo impiegato da un taxi per attraversare la cella corrispondente */
+}values_to_taxi;
+
+typedef union{
+	int completed_trips_counter; /* numero di viaggi completati dal taxi */
+	int max_timensec_complete_trip_value; /* tempo massimo impiegato per completare un viaggio */
+	int max_cells_crossed_longest_trip_value; /* numero massimo di celle attraversate in un viaggio */
+	int cell_crossed_map_counter; /* mapping della matrice che contiene il numero di volte in cui ogni cella è stata attrversata da un taxi */
+} taxi_returned_values;
 
 #define MSG_LEN 128
 /* struttura del buffer della coda di messaggi */
