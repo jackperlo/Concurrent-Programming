@@ -14,6 +14,15 @@
 #include <sys/sem.h>
 #include <sys/stat.h>
 
+/* colori di foreground e background */
+#define RESET "\x1B[0m"
+#define KBLACK "\x1B[31m"
+#define KWHT  "\x1B[37m"
+#define BGRED "\x1B[101m"
+#define BGGREEN "\x1B[102m"
+#define BGWHITE "\x1B[107m"
+#define BGMAGENTA "\x1B[105m"
+
 #ifndef SO_HEIGHT
 #define SO_HEIGHT 10
 #endif
@@ -25,6 +34,8 @@
 #define VALUES_TO_SOURCE 0
 #define VALUES_TO_TAXI 1
 #define TAXI_RETURNED_VALUES 2
+#define TAXI_ABORTED_STATUS 404
+#define TAXI_NOT_COMPLETED_STATUS 400
 
 int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 int **SO_TIMENSEC_MAP; /* puntatore a matrice dei tempi di attesa per ogni cella */

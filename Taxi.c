@@ -124,7 +124,7 @@ void signal_handler(int sig){
         case SIGQUIT:
             dprintf(1,"Fine esecuzione processo taxi %d!\n", getpid()); /* da togliere */ 
             free_mat();
-            exit(1); 
+            exit(TAXI_NOT_COMPLETED_STATUS); 
             break;
 
         default:
