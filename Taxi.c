@@ -92,15 +92,17 @@ void init(int argc, char *argv[]){
     }
 
     /* attacco taxi alla shd mem per i valori da ritornare al padre */
-    shd_mem_taxi_returned_values =(taxi_returned_values *)shmat(atoi(argv[7]), NULL, 0);
+    shd_mem_taxi_returned_values =shmat(atoi(argv[7]), NULL, 0);
     if(shd_mem_taxi_returned_values == (taxi_returned_values *)(-1))
         fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
 
     /* attacco taxi alla shd mem per i valori passati dal padre al taxi */
-    shd_mem_values_to_taxi = (values_to_taxi *)shmat(atoi(argv[3]), NULL, 0);
+    shd_mem_values_to_taxi = shmat(atoi(argv[3]), NULL, 0);
     if(shd_mem_values_to_taxi == (values_to_taxi *)(-1))
         fprintf(stderr, "\n%s: %d. Impossibile agganciare la memoria condivisa \n", __FILE__, __LINE__);
+
     init_maps();
+   
     shmdt(shd_mem_values_to_taxi);
 }
 
@@ -169,8 +171,8 @@ void struct_to_maps(){
     int i, k, cnt=0;
     for (i = 0; i < SO_HEIGHT; i++){
         for(k= 0; k < SO_WIDTH; k++){
-            map[i][k] = shd_mem_values_to_taxi[cnt].cell_map_value;
-            SO_TIMENSEC_MAP[i][k] = shd_mem_values_to_taxi[cnt].cell_timensec_map_value;
+            map[i][k] = (shd_mem_values_to_taxi+cnt)->cell_map_value;
+            SO_TIMENSEC_MAP[i][k] = (shd_mem_values_to_taxi+cnt)->cell_timensec_map_value;
             cnt++;
         }
     }

@@ -26,7 +26,7 @@ void execution(); /* esecuzione temporizzata del programma con stampa delle matr
 void signal_actions(); /* imposta il signal handler */
 void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
-void cpy_mem(void* dest, void* from, int max, int single_size);
+void cpy_mem_values(int what_to_init); /* copia in shd mem i valori presenti in mem locale */
 void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
 void cleaner(); /* metodo per pulizia memoria da deallocare */
 void init_sem(); /* inizializza semafori */
@@ -41,6 +41,7 @@ void init_shd_mem(int dim, int isTaxi);
 /* extended_mapping: 1 => converte MAP, SO_TIMENSEC_MAP, SO_TOP_CELLS_MAP in una struttura che contiene i rispettivi valori divisi per mappa e per cella*/
 void maps_to_struct(int dim, int extended_mapping); 
 void get_top_cells(); /* dalla matrice SO_TOP_CELLS_MAP estrae le SO_TOP_CELLS più attraversate */
+int check_max_n_taxi(); /* controlla il numero di taxi massimo inseribile nella mappa */
 
 /*-------------VARIABILI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -60,9 +61,7 @@ int msg_queue_id; /* id della coda di messaggi per far comunicare sources e taxi
 sigset_t masked; /* maschera per i segnali */ 
 struct msqid_ds buf; /* struct che contiene le stats della coda di messaggi. Utile per estrarre tutti i messaggi rimasti non letti */
 int SO_TRIP_NOT_COMPLETED = 0; /* numero di viaggi ancora da eseguire o in itinere nel momento della fine dell'esecuzione */
-values_to_source *aus_shd_mem_values_to_source; /* typdef di una struct che contiene il valore di ogni cella della matrice map, mappata in un'array di struct del tipo definito dal typedef */
 values_to_source *shd_mem_values_to_source; /* stesso typdef della riga sopra, serve per allocare il shd mem uno spazio sufficiente a copiare la map_struct in mem condivisa */
-values_to_taxi *aus_shd_mem_values_to_taxi; /* puntatore a struttura che contiene i valori delle due matrici in un'unica struttura */
 values_to_taxi *shd_mem_values_to_taxi; /* serve per allocare il shd mem uno spazio sufficiente a copiare le maps_struct in mem cond */
 taxi_returned_values *shd_mem_taxi_returned_values; /* puntatore a struttura che contiene i 3 parametri da ritornare al master da parte dei */ 
 int child_who_does_user_request; /* PID del figlio SO_SOURCE che prenderà in carico la richiesta esplicita da terminale mandata al processo master */
@@ -246,8 +245,12 @@ void init(){
     /* genero i processi source */
     source_processes_generator();
 
-    /* genero i processi taxi */
-    taxi_processes_generator(SO_TAXI);
+    if(check_max_n_taxi() >= SO_TAXI){
+        /* genero i processi taxi */
+        taxi_processes_generator(SO_TAXI);
+    }else{
+        kill_all_children();
+    }
 }
 
 void map_generator(){
@@ -258,9 +261,13 @@ void map_generator(){
 
 void init_map(){
     int i, j;
+    /*ctr=0;*/
     for (i = 0; i < SO_HEIGHT; i++){
-        for (j = 0; j < SO_WIDTH; j++)
+        for (j = 0; j < SO_WIDTH; j++){
             map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
+            /*dprintf(1, "\nindice: %d => [%d][%d]=%d", ctr, i, j, map[i][j]);
+            ctr++;*/
+        } 
     }
 }
 
@@ -342,24 +349,24 @@ void print_map(int isTerminal){
             {
             /* CASO 0: cella invalida, quadratino nero */
             case 0:
-                printf("|" BGRED KBLACK "_" RESET);
+                printf( BGRED KBLACK "|_|" RESET);
                 break;
             /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
             case 1:
                 if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
-                        printf("|%d" RESET,SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                        printf("|%d|" RESET,SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                 else
-                    printf("|_" RESET);
+                    printf("|_|" RESET);
                 break;
             /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
                 if(isTerminal)
-                    printf("|" BGGREEN KBLACK "_" RESET);
+                    printf( BGGREEN KBLACK "|_|" RESET);
                 else
                     if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
-                        printf("|%d",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                        printf("|%d|",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                     else
-                        printf("|_");
+                        printf("|_|");
             
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
@@ -636,8 +643,8 @@ void free_mat(){
         currentIntPtr = SO_TOP_CELLS_MAP[i];
         free(currentIntPtr);
     }
-    free(aus_shd_mem_values_to_source);
-    free(aus_shd_mem_values_to_taxi);
+    /*free(aus_shd_mem_values_to_source);
+    free(aus_shd_mem_values_to_taxi);*/
 }
 
 void execution(){
@@ -794,67 +801,37 @@ void print_map_specific(int** m, int isTerminal){
     }
 }
 
-void maps_to_struct(int dim, int extended_mapping){
-    int i, j, ctr = 0;
-
-    if(extended_mapping == VALUES_TO_SOURCE){
-        aus_shd_mem_values_to_source = (values_to_source*)malloc(dim);
-        for(i = 0; i < SO_HEIGHT; i++){
-            for(j = 0; j < SO_WIDTH; j++){
-                aus_shd_mem_values_to_source[ctr].cell_map_value = map[i][j];
-                ctr++;
-            }
-        }
-    }else{
-        aus_shd_mem_values_to_taxi = (values_to_taxi*)malloc(dim);
-        for(i = 0; i < SO_HEIGHT; i++){
-            for(j = 0; j < SO_WIDTH; j++){
-                aus_shd_mem_values_to_taxi[ctr].cell_map_value = map[i][j];
-                aus_shd_mem_values_to_taxi[ctr].cell_timensec_map_value = SO_TIMENSEC_MAP[i][j];
-                ctr++;
-            }
-        }
-    }
-    
-}
-
-void init_shd_mem(int dim, int what_to_init){
-    int i=0;
-    size_t prova;
+void init_shd_mem(int dim, int what_to_init){ 
     if(what_to_init == VALUES_TO_SOURCE){
-        /* converte la mappa in una struttura che contiene i valori della matrice */
-        maps_to_struct(dim, what_to_init);
-
         /*INIZIALIZZO LA SHARED MEMORY PER I SOURCE */
-        shd_id_values_to_source = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600);
-        TEST_ERROR;
-        
-        shd_mem_values_to_source = (values_to_source *)shmat(shd_id_values_to_source, NULL, 0);
+        shd_id_values_to_source = shmget(IPC_PRIVATE, dim, IPC_CREAT | IPC_EXCL | 0600);
         TEST_ERROR;
 
+        shd_mem_values_to_source = shmat(shd_id_values_to_source, NULL, 0);
+        TEST_ERROR;
+
+        cpy_mem_values(what_to_init); /* copia i valori locali in mem condivisa */
+        
         /* la shd mem verrà deallocata non appena tutti i processi si staccano */
         shmctl(shd_id_values_to_source, IPC_RMID, NULL);
-        cpy_mem(shd_mem_values_to_source, aus_shd_mem_values_to_source, SO_WIDTH*SO_HEIGHT, sizeof(values_to_source));
     }else if(what_to_init == VALUES_TO_TAXI){
-        /* converte la mappa in una struttura che contiene i valori della matrice */
-        maps_to_struct(dim, what_to_init);
-
         /*INIZIALIZZO LA SHARED MEMORY PER I TAXI */
-        shd_id_values_to_taxi = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600); 
+        shd_id_values_to_taxi = shmget(IPC_PRIVATE, dim, IPC_CREAT | IPC_EXCL | 0600); 
         TEST_ERROR;
 
-        shd_mem_values_to_taxi = (values_to_taxi *)shmat(shd_id_values_to_taxi, NULL, 0);
+        shd_mem_values_to_taxi = shmat(shd_id_values_to_taxi, NULL, 0);
         TEST_ERROR;
+
+        cpy_mem_values(what_to_init);
 
         /* la shd mem verrà deallocata non appena tutti i processi si staccano */
         shmctl(shd_id_values_to_taxi, IPC_RMID, NULL);
-        cpy_mem(shd_mem_values_to_source, aus_shd_mem_values_to_source, (SO_WIDTH*SO_HEIGHT)+3, sizeof(values_to_taxi));  
     }else{
         /*INIZIALIZZO LA SHARED MEMORY PER I TAXI */
-        shd_id_ret_from_taxi = shmget(IPC_PRIVATE, sizeof(dim), IPC_CREAT | IPC_EXCL | 0600); 
+        shd_id_ret_from_taxi = shmget(IPC_PRIVATE, dim, IPC_CREAT | IPC_EXCL | 0600); 
         TEST_ERROR;
 
-        shd_mem_taxi_returned_values = (taxi_returned_values *)shmat(shd_id_ret_from_taxi, NULL, 0);
+        shd_mem_taxi_returned_values = shmat(shd_id_ret_from_taxi, NULL, 0);
         TEST_ERROR;
 
         /* pulisce la shared memory: setta dim bytes a 0 */
@@ -863,6 +840,31 @@ void init_shd_mem(int dim, int what_to_init){
         /* la shd mem verrà deallocata non appena tutti i processi si staccano */
         shmctl(shd_id_ret_from_taxi, IPC_RMID, NULL);
     }
+}
+
+void cpy_mem_values(int what_to_init){
+    int i, j;
+    long ctr;
+
+    if(what_to_init == VALUES_TO_SOURCE){
+        ctr=0;
+        for(i = 0; i < SO_HEIGHT; i++){
+            for(j = 0; j < SO_WIDTH; j++){
+                (shd_mem_values_to_source+ctr)->cell_map_value = map[i][j];
+                ctr++;
+            }
+        } 
+    }else{
+        ctr=0;
+        for(i = 0; i < SO_HEIGHT; i++){
+            for(j = 0; j < SO_WIDTH; j++){
+                (shd_mem_values_to_taxi+ctr)->cell_map_value = map[i][j];
+                (shd_mem_values_to_taxi+ctr)->cell_timensec_map_value = SO_TIMENSEC_MAP[i][j];
+               ctr++;
+            }
+        }
+    }
+
 }
 
 void init_msg_queue(){
@@ -909,9 +911,7 @@ void cleaner(){
         shmdt(shd_mem_values_to_taxi);
 
     /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
-    
     msgctl(msg_queue_id, IPC_RMID, NULL);
-    
 
     if(sem_sync_id){
         semctl(sem_sync_id, 0, IPC_RMID);
@@ -948,10 +948,14 @@ void get_top_cells(){
     free(top_cells_list);
 }
 
-void cpy_mem(void* dest, void* from, int max, int single_size){
-    int i;
-
-    for(i=0; i<max; i++){
-        memcpy((&dest + i), (&from + i), single_size);
+int check_max_n_taxi(){
+    int i, j, counter=0;
+    for (i = 0; i < SO_HEIGHT; i++)
+    {
+        for (j = 0; j < SO_WIDTH; j++){
+            if(map[i][j] != 0)
+                counter += SO_CAP[i][j];
+        }
     }
+    return counter;
 }
