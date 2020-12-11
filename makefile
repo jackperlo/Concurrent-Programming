@@ -8,11 +8,11 @@ OBJTAXI = Taxi.c
 OBJSOURCE = Source.c
 OBJCOMMON = Common.h
 TARGET = Master
-ifndef SO_HEIGHT
-	SO_HEIGHT = 20
-endif
 ifndef SO_WIDTH
-	SO_WIDTH = 30
+	SO_WIDTH = 20
+endif
+ifndef SO_HEIGHT
+	SO_HEIGHT = 10
 endif
 
 $(TARGET): $(OBJMASTER) $(OBJTAXI) $(OBJSOURCE) $(OBJCOMMON)

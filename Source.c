@@ -31,6 +31,7 @@ int generate_request();  /* metodo di supporto che genera e inserisce la richies
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 void free_mat(); /* libero lo spazio allocato per la matrice map locale */
 void check_map_to_allow_requests(); /* controlla che nella mappa esista almeno una cella non source e non inaccessibile (che possa quindi essere scelta da destinazione per le richieste) */
+void wait_for_syncronization(); /*metodo d'appoggio che attende la sincronizzazione di tutti i source*/
 
 int main(int argc, char *argv[]){
     /* controllo sul numero di parametri che il padre gli passa */
@@ -45,18 +46,11 @@ int main(int argc, char *argv[]){
     /* inizializzo i segnali e i relativi handler che andranno a gestirli */
     signal_actions();
 
-    /**/
+    /* controlla che nella mappa esista almeno una cella non source e non inaccessibile (che possa quindi essere scelta da destinazione per le richieste)*/
     check_map_to_allow_requests();
 
-    /* attendo che tutti gli altri processi source siano pronti */
-    s_queue_buff[0].sem_num = 1; 
-    s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-    s_queue_buff[0].sem_num = 1;
-    s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+    /* attendo che tutti gli altri taxi siano pronti per eseguire */
+    wait_for_syncronization();
 
     /* INIZIO ESECUZIONE DEI SOURCE */
 
@@ -117,12 +111,13 @@ void signal_actions(){
 
     sigaddset(&masked, SIGALRM);
     sigaddset(&masked, SIGQUIT);
+    sigaddset(&masked, SIGINT);
     sigaddset(&masked, SIGUSR1); /* sfrutto la maschera con flag di restart già usata per il SIGARLM*/
 
     restart.sa_mask = masked;
     abort.sa_mask = masked;
 
-    if(sigaction(SIGALRM, &restart, NULL) || sigaction(SIGQUIT, &abort, NULL) || sigaction(SIGUSR1, &restart, NULL)){
+    if(sigaction(SIGALRM, &restart, NULL) || sigaction(SIGQUIT, &abort, NULL) || sigaction(SIGUSR1, &restart, NULL) || sigaction(SIGINT, &abort, NULL)){
         exit(EXIT_FAILURE_CUSTOM);
     }
 }
@@ -135,7 +130,7 @@ void signal_handler(int sig){
         case SIGALRM:
             requests++;
             generate_request();
-            dprintf(1,"\nAggiungo una richiesta in coda! Sono : %d", getpid());
+            /* dprintf(1,"\nAggiungo una richiesta in coda! Sono : %d", getpid());*/
             /* prossima richiestra verrà fatta tra timing secondi.. */ 
             timing = 1 + rand() % 10; 
             alarm(timing);
@@ -144,17 +139,18 @@ void signal_handler(int sig){
         /* Termine Esecuzione del Source */
         case SIGQUIT:
             alarm(0); /* RESET DELL'ALARM. Cosi non si genererà più la richiesta che stava avanzando dalla chiamata all'ultimo alarm */
-            dprintf(1, KRED "\nFine esecuzione processo source!\n" RESET); /* da togliere */ 
             /* RITORNO AL PADRE IL NUMERO DI RICHIESTE CHE HO ESEGUITO */
             free_mat();
             exit(requests); 
             break;
-
+        case SIGINT:
+            raise(SIGQUIT);
+            break;
         /* richiesta esplicita da terminale giunta dal processo master (solo il figlio con uno specifico PID scelto dal padre triggererà questo handler) */
         case SIGUSR1:
             requests++;
             generate_request();
-            dprintf(1,"\nAGGIUNGO LA RICHIESTA ESPLICITA DA TERMINALE IN CODA! Sono : %d", getpid());
+            /*dprintf(1,"\nAGGIUNGO LA RICHIESTA ESPLICITA DA TERMINALE IN CODA! Sono : %d", getpid());*/
             break;
 
         default:
@@ -201,7 +197,7 @@ int generate_request(){
     {
         toX = rand() % SO_HEIGHT;
         toY = rand() % SO_WIDTH;
-    }while(map[toX][toY] != 0);
+    }while(map[toX][toY] != 1);
    
     /* inizializzo i parametri nel buffer */
     msg_buffer.mtype = (x * SO_WIDTH) + y + 1;
@@ -282,4 +278,16 @@ void check_map_to_allow_requests(){
         while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
         raise(SIGQUIT);
     }    
+}
+
+void wait_for_syncronization(){
+    /* attendo che tutti gli altri processi source siano pronti */
+    s_queue_buff[0].sem_num = 1; 
+    s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
+    s_queue_buff[0].sem_flg = 0;
+    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+    s_queue_buff[0].sem_num = 1;
+    s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
+    s_queue_buff[0].sem_flg = 0;
+    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 }

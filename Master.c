@@ -20,7 +20,7 @@ void assign_source_cells(); /* metodo di supporto a map_generator(), assegna le 
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void source_processes_generator(); /* fork dei processi sorgenti */
-void taxi_processes_generator(int number); /* fork di number processi taxi (utile perche richiamabile anche quando un taxi abortisce e va rigenerato un singolo processo, oltre che la generazione iniziale dei SO_TAXI) */
+void taxi_processes_generator(int number, int pid); /* fork di number processi taxi (utile perche richiamabile anche quando un taxi abortisce e va rigenerato un singolo processo, oltre che la generazione iniziale dei SO_TAXI) */
 void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
 void signal_actions(); /* imposta il signal handler */
@@ -47,8 +47,8 @@ int check_max_n_taxi(); /* controlla il numero di taxi massimo inseribile nella 
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
 int SO_CAP_MIN; /* capacità minima assumibile da SO_CAP: determina il minimo numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
 int SO_CAP_MAX; /* capacità massima assumibile da SO_CAP: determina il MASSIMO numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
-int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
-int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
+long int SO_TIMENSEC_MIN; /* valore minimo assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
+long int SO_TIMENSEC_MAX; /* valore MASSIMO assumibile da SO_TIMESEC, che rappresenta il tempo di attraversamento di una cella della matrice */
 int **SO_CAP; /* puntatore a matrice di capacità massima per ogni cella */
 pid_t **SO_SOURCES_PID; /* puntatore a matrice contenente i PID dei processi SOURCES nella loro coordinata di riferimento */
 pid_t *SO_TAXIS_PID; /* puntatore ad array contenente i PID dei processi TAXI */
@@ -74,7 +74,7 @@ int SO_TRIP_ABORTED; /* numero di viaggi totali abortiti a causa del deadlock di
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
-	int value;
+	long int value;
 	char name[20];
 	struct node * next;  
 } node;
@@ -82,7 +82,7 @@ typedef node* param_list; /* conterrà la lista dei parametri passati tramite fi
 param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
 param_list insert_exec_param_into_list(char name[], int value); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
 void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
-int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
+long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 
@@ -140,11 +140,11 @@ void init(){
             return;
     }
 
-    SO_TIMENSEC_MAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
+    SO_TIMENSEC_MAP = (long int **)malloc(SO_HEIGHT*sizeof(long int *));
     if (SO_TIMENSEC_MAP == NULL)
         return;
     for (i=0; i<SO_HEIGHT; i++){
-        SO_TIMENSEC_MAP[i] = malloc(SO_WIDTH*sizeof(int));
+        SO_TIMENSEC_MAP[i] = malloc(SO_WIDTH*sizeof(long int));
         if (SO_TIMENSEC_MAP[i] == NULL)
             return;
     }
@@ -234,7 +234,7 @@ void init(){
     init_shd_mem( ((SO_WIDTH*SO_HEIGHT) * sizeof(values_to_taxi)), VALUES_TO_TAXI);
 
     /* inizializzo la shd mem in cui i taxi scrivono le loro statistiche; "ritornata" al padre alla loro morte */
-    init_shd_mem( ((3+(SO_WIDTH*SO_HEIGHT)) * sizeof(taxi_returned_values)), TAXI_RETURNED_VALUES);
+    init_shd_mem( ((7+(SO_WIDTH*SO_HEIGHT)) * sizeof(taxi_returned_values)), TAXI_RETURNED_VALUES);
 
     /* inizializzo la coda di messaggi che verrà utilizzata dai sources e taxi per scambiarsi informazioni riguardo le richieste. Master la sfrutterà per inserire eventuali richieste derivanti da terminale nella coda */
     init_msg_queue();
@@ -245,12 +245,8 @@ void init(){
     /* genero i processi source */
     source_processes_generator();
 
-    if(check_max_n_taxi() >= SO_TAXI){
-        /* genero i processi taxi */
-        taxi_processes_generator(SO_TAXI);
-    }else{
-        kill_all_children();
-    }
+    /* genero i processi taxi */
+    taxi_processes_generator(SO_TAXI, 0);
 }
 
 void map_generator(){
@@ -331,14 +327,18 @@ void assign_source_cells(){
 void print_map(int isTerminal){
     /* indici per ciclare */
     int i, k;
+    double sec;
+    system("clear");
     if(isTerminal){
-        dprintf(1, "\nNumero totale di viaggi competati: %d", shd_mem_taxi_returned_values[0].completed_trips_counter); /* completed_trips_counter */
+        sec = (double)shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value/(double)1000000000;
+        dprintf(1, "\nNumero totale di viaggi completati: %d", shd_mem_taxi_returned_values[0].completed_trips_counter); /* completed_trips_counter */
         msgctl(msg_queue_id, IPC_STAT, &buf);
         SO_TRIP_NOT_COMPLETED += buf.msg_qnum; /* messaggi di richiesta rimasti non considerati alla morte di tutti i figli: fanno parte dei viaggi inevasi */
         dprintf(1, "\nNumero totale di viaggi inevasi: %d", SO_TRIP_NOT_COMPLETED);
-        dprintf(1,"\nNumero totale di viaggi abortiti: %d", SO_TRIP_ABORTED);
-        dprintf(1, "\nTempo massimo impiegato per il completamento di un viaggio: %d", shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value); /* max_timensec_complete_trip_value */
-        dprintf(1, "\nMassimo di celle attraversate nel viaggio più lungo: %d\n", shd_mem_taxi_returned_values[2].max_cells_crossed_longest_trip_value); /* max_cells_crossed_longest_trip_value */
+        dprintf(1, "\nNumero totale di viaggi abortiti: %d", SO_TRIP_ABORTED);
+        dprintf(1, "\nProcesso che ha fatto più strada in numero di celle: PID:%d ha attraversato %d celle", shd_mem_taxi_returned_values[5].pid, shd_mem_taxi_returned_values[2].total_n_cells_crossed_value); 
+        dprintf(1, "\nIl Taxi %d ha fatto il viaggio più lungo nel servire una richiesta:\n\t%dns\n\t~%fs", shd_mem_taxi_returned_values[4].pid, shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value, sec);
+        dprintf(1, "\nIl Taxi %d ha raccolto più richieste/clienti; sono ben: %d\n", shd_mem_taxi_returned_values[6].pid, shd_mem_taxi_returned_values[3].max_trip_completed);  
         get_top_cells();
     }
 
@@ -361,18 +361,23 @@ void print_map(int isTerminal){
             /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
             case 2:
                 if(isTerminal)
-                    printf( BGGREEN KBLACK "|_|" RESET);
+                    if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
+                        printf(BGGREEN KBLACK "|%d|" RESET,SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                    else
+                        printf(BGGREEN KBLACK "|_|" RESET);
                 else
                     if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
                         printf("|%d|",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                     else
                         printf("|_|");
-            
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
                 if(isTerminal)
-                    printf("|L");
+                    if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
+                        printf(BGMAGENTA KBLACK "|%d|" RESET,SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                    else
+                        printf(BGMAGENTA KBLACK "|_|" RESET);
                 else
                     printf("E");
                 break;
@@ -436,10 +441,10 @@ void source_processes_generator(){
     }
 }
 
-void taxi_processes_generator(int number){
-    int i,x,y,valid; 
+void taxi_processes_generator(int number, int aborted_pid){
+    int i, x, y, valid, k=0; 
     char *taxi_args[9]; /* argomenti passati ai processi taxi */
-    srand(time(NULL));
+    srand(time(NULL)*1000*number);
 
     /* CREO I PROCESSI */
     for (i = 0; i < number; i++){
@@ -455,13 +460,22 @@ void taxi_processes_generator(int number){
                     if(errno != EAGAIN && errno != EINTR){
                         TEST_ERROR;
                     }
-                }else
+                }else{
                     valid = 1;
-                
+                }
             }
         }while(!valid);
-
-        switch(SO_TAXIS_PID[i] = fork()){
+        
+        if(aborted_pid==0) /*non siamo nel caso che rigenera un processo abortito*/
+            k=i;
+        else{
+            for(k=0;k<SO_TAXI;k++){
+                if(SO_TAXIS_PID[k] == aborted_pid)
+                    break;
+            }
+        }
+        
+        switch(SO_TAXIS_PID[k] = fork()){
             case -1:
                 /* errore nella fork */
                 fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
@@ -494,7 +508,10 @@ void taxi_processes_generator(int number){
                 taxi_args[7] = malloc(sizeof((char)shd_id_ret_from_taxi));
                 sprintf(taxi_args[7], "%d", shd_id_ret_from_taxi);
 
-                taxi_args[8] = NULL;
+                taxi_args[8] = malloc(sizeof((char)sem_cells_id));
+                sprintf(taxi_args[8], "%d", sem_cells_id);
+
+                taxi_args[9] = NULL;
 
                 execvp(TAXI, taxi_args);
 
@@ -536,12 +553,12 @@ void print_exec_param_list(){
 		return;
 	}
 	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
-		printf("\nNOME: %s ---- VALORE: %d", aus_param_list->name, aus_param_list->value);
+		printf("\nNOME: %s ---- VALORE: %ld", aus_param_list->name, aus_param_list->value);
 	}
 	printf("\n");
 }
 
-int search_4_exec_param(char nomeParam[]){
+long int search_4_exec_param(char nomeParam[]){
     param_list aus_param_list = listaParametri;
 	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
         if (strcmp(aus_param_list->name,nomeParam) == 0){
@@ -625,6 +642,7 @@ void free_param_list(param_list aus_list){
 void free_mat(){
     int i;
     int *currentIntPtr;
+    long int *currentLongPtr;
     pid_t *currentPid_tPtr;
     /* free map 2d array */
     for (i = 0; i < SO_HEIGHT; i++){
@@ -634,17 +652,15 @@ void free_mat(){
         currentIntPtr = SO_CAP[i];
         free(currentIntPtr);
 
-        currentIntPtr = SO_TIMENSEC_MAP[i];
-        free(currentIntPtr);
+        currentLongPtr = SO_TIMENSEC_MAP[i];
+        free(currentLongPtr);
 
-        currentIntPtr = SO_SOURCES_PID[i];
-        free(currentIntPtr);
+        currentPid_tPtr = SO_SOURCES_PID[i];
+        free(currentPid_tPtr);
 
         currentIntPtr = SO_TOP_CELLS_MAP[i];
         free(currentIntPtr);
     }
-    /*free(aus_shd_mem_values_to_source);
-    free(aus_shd_mem_values_to_taxi);*/
 }
 
 void execution(){
@@ -669,11 +685,12 @@ void execution(){
     alarm(1);
     while ((pid = wait(&status)) > 0){
         /* codice di ritorno dei taxi che stavano eseguendo una corsa mentre sono morti */
-        if(status == TAXI_NOT_COMPLETED_STATUS)
+        if(WEXITSTATUS(status) == TAXI_NOT_COMPLETED_STATUS)
             SO_TRIP_NOT_COMPLETED++;
-        else if(status == TAXI_ABORTED_STATUS){
+        else if(WEXITSTATUS(status) == TAXI_ABORTED_STATUS){
+            dprintf(1, KRED "\nTAXI ABORTITO!" RESET);
             SO_TRIP_ABORTED++;
-            /* RICORDA: GESTIONE DEI PROCESSI ABORTED */
+            taxi_processes_generator(1, pid);
         }
     }; /* aspetta che siano terminati tutti i suoi figli */
 
@@ -864,7 +881,6 @@ void cpy_mem_values(int what_to_init){
             }
         }
     }
-
 }
 
 void init_msg_queue(){
@@ -876,15 +892,20 @@ void init_sem(){
     int i, minC, maxC;
 
     /* semaforo message queue */
-    sem_sync_id = semget(IPC_PRIVATE, 2, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
+    sem_sync_id = semget(IPC_PRIVATE, 3, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);
     TEST_ERROR;
 
     sem_arg.val = 1;
 
     semctl(sem_sync_id, 0, SETVAL, sem_arg);
     TEST_ERROR;
-    sem_arg.val = search_4_exec_param("SO_SOURCES");
+
+    sem_arg.val = search_4_exec_param("SO_SOURCES") + search_4_exec_param("SO_TAXI");
     semctl(sem_sync_id, 1, SETVAL, sem_arg);
+    TEST_ERROR;
+    
+    sem_arg.val = 1; /* mutex returned value */
+    semctl(sem_sync_id, 2, SETVAL, sem_arg);
     TEST_ERROR;
     
     /* inizializza i semafori delle celle */
@@ -904,6 +925,7 @@ void cleaner(){
     free_param_list(listaParametri);
     free_mat();
 
+    
     /* deallocazione memoria condivisa */
     if(shd_id_values_to_source)
         shmdt(shd_mem_values_to_source);
@@ -916,6 +938,7 @@ void cleaner(){
     if(sem_sync_id){
         semctl(sem_sync_id, 0, IPC_RMID);
         semctl(sem_sync_id, 1, IPC_RMID);
+        semctl(sem_sync_id, 2, IPC_RMID);
     }
 
     if(sem_cells_id)
@@ -936,13 +959,16 @@ void get_top_cells(){
         top_cells_list[i] = 0;
 
     for(j=0; j<SO_TOP_CELLS; j++){
-        for(i=3; i<(SO_HEIGHT*SO_WIDTH) + 3; i++){
-            if((top_cells_list[j] < shd_mem_taxi_returned_values[i].completed_trips_counter) && (map[(i-3)/SO_WIDTH][(i-3)%SO_WIDTH] != 3)){
-                top_cells_list[j] = shd_mem_taxi_returned_values[i].completed_trips_counter;
+        for(i=7; i<(SO_HEIGHT*SO_WIDTH) + 7; i++){
+            if((top_cells_list[j] < shd_mem_taxi_returned_values[i].cell_crossed_map_counter) && (map[(i-7)/SO_WIDTH][(i-7)%SO_WIDTH] != 3)){
+                top_cells_list[j] = shd_mem_taxi_returned_values[i].cell_crossed_map_counter;
                 aus = i;
             }
         }
-        map[(aus-3)/SO_WIDTH][(aus-3)%SO_WIDTH] = top_cells_list[j];
+        if(aus != 0){
+            map[(aus-7)/SO_WIDTH][(aus-7)%SO_WIDTH] = 3;
+            aus = 0;
+        }
     }
 
     free(top_cells_list);
