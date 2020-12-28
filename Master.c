@@ -1,22 +1,23 @@
+/*file d'intesazione comune ai 3 moduli: Master, Source, Taxi*/
 #include "Common.h"
 
-/*-------------DEFINE di COSTANTI o MACRO--------------*/
 /* file eseguibili da cui i figli del master assorbiranno il codice */
 #define TAXI "./Taxi"
 #define SOURCE "./Source"  
 /* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
 #define SETTING_PATH "./settings"
 #define NUM_PARAM 10
-
 /* define richiamata dalla macro TESTERROR definita in common*/
 #define CLEAN cleaner();
 
 /*------------DICHIARAZIONE METODI------------*/
 void init(); /* inizializzazione delle variabili */
 void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SOURCES */
+void forced_free_param_error(); /*free delle strutture dati forzata causa incorrettezza parametri d'esecuzione estratti*/
 void init_map(); /* inizializza la matrice vergine (tutte le celle a 1)*/
-void assign_holes_cells(); /* metodo di supporto a map_generator(), assegna le celle invalide */
-void assign_source_cells(); /* metodo di supporto a map_generator(), assegna le celle sorgenti */
+void assign_holes_cells(int SO_HOLES); /* metodo di supporto a map_generator(), assegna le celle invalide */
+void aus_map_util(int** aus_map, int request); /*metodo di supporto per lavorare sulla mappa ausiliaria che evita il loop durante il posizionamento degli holes. request:1=>pulisco la mappa ausiliaria, ogni cella =1. request:0=>eseguo la free della mappa*/
+void assign_source_cells(int SO_SOURCES); /* metodo di supporto a map_generator(), assegna le celle sorgenti */
 int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_generator(). controlla se le 8 celle adiacenti a quella considerata sono tutte non inaccessibili */ 
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void source_processes_generator(); /* fork dei processi sorgenti */
@@ -33,15 +34,13 @@ void init_sem(); /* inizializza semafori */
 void kill_all_children(); /* elimina tutti i figli */
 int select_a_child_to_do_the_request(); /* seleziona il primo figlio che trova dalla matrice che contiene i pid dei figli e lo destina a alzare la richiesta effettuata via SIGUSR1 */
 void signal_sigusr1_actions(); /* gestisce il segnale di richiesta inviato da terminale */
-/* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
-/* isTaxi: 1 => inizializza la shd mem per i taxi */
-/* isTaxi: 0 => viceversa */
-void init_shd_mem(int dim, int isTaxi); 
-/* extended_mapping: 0 => convert MAP in struct */
-/* extended_mapping: 1 => converte MAP, SO_TIMENSEC_MAP, SO_TOP_CELLS_MAP in una struttura che contiene i rispettivi valori divisi per mappa e per cella*/
-void maps_to_struct(int dim, int extended_mapping); 
 void get_top_cells(); /* dalla matrice SO_TOP_CELLS_MAP estrae le SO_TOP_CELLS più attraversate */
 int check_max_n_taxi(); /* controlla il numero di taxi massimo inseribile nella mappa */
+void init_shd_mem(int dim, int isTaxi); /* metodo d'appoggio che raccoglie l'inizializzazione della shd mem */
+                                        /* isTaxi: 1 => inizializza la shd mem per i taxi */
+                                        /* isTaxi: 0 => viceversa */
+void maps_to_struct(int dim, int extended_mapping); /* extended_mapping: 0 => convert MAP in struct */
+                                                    /* extended_mapping: 1 => converte MAP, SO_TIMENSEC_MAP, SO_TOP_CELLS_MAP in una struttura che contiene i rispettivi valori divisi per mappa e per cella*/
 
 /*-------------VARIABILI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
@@ -71,6 +70,8 @@ int SO_TOP_ROAD; /* processo che ha fatto più strada in numero di celle attrave
 int SO_TOP_LENGTH; /* processo che ha impiegato più tempo(in nsec) in un viaggio */
 int SO_TOP_REQ; /* processo che ha completato più request di clienti */
 int SO_TRIP_ABORTED; /* numero di viaggi totali abortiti a causa del deadlock di un qualche taxi */
+int sigquitsent=0; /*mi dice se è già stata inviata una sigquit (=1), 0 altrimenti*/
+int free_so_taxis_pid=0; /*utile per una free specifica nel free_mat*/
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
@@ -80,14 +81,13 @@ typedef struct node {
 } node;
 typedef node* param_list; /* conterrà la lista dei parametri passati tramite file di settings */
 param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
-param_list insert_exec_param_into_list(char name[], int value); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
+param_list insert_exec_param_into_list(char name[], char value[]); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
 void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
 long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 
 int main(int argc, char *argv[]){
-    char *s;
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
@@ -115,13 +115,10 @@ void init(){
     FILE *settings;
     /* conterranno nome e valore di ogni parametro definito in settings */
     char name[100];
-    int value;
+    char value[20];
     int check_n_param_return_value = -1; /*conterrà il numero di nodi(=numero di parametri) presenti nella lista che legge i parametri da file di settings */
     
-    int n_top_cells = -1; /* definisce la dimensione dell'array che contiene le n_top_cells più attraversate */
-
     /*-----------INIZIALIZZO LE MATRICI GLOBALI--------------*/
-
     map = (int **)malloc(SO_HEIGHT*sizeof(int *));
     if (map == NULL)
         return;
@@ -160,41 +157,7 @@ void init(){
             SO_SOURCES_PID[i][j] = 0;
     }
 
-    /*-----------LEGGO I PARAMETRI DI ESECUZIONE-------------*/
-    /* inizializzo il random */
-    srand(time(NULL));
-    /* apro il file settings */
-    if((settings = fopen(SETTING_PATH , "r")) == NULL){
-        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
-		exit(EXIT_FAILURE);
-    }
-    for(i=0; i<NUM_PARAM; i++){
-        /* leggo ogni riga del file finché non raggiunge la fine EOF */
-        while(fscanf(settings, "%s = %d\n", name, &value) != EOF)
-            listaParametri = insert_exec_param_into_list(name, value);
-    }
-
-    /* check: ho tutti e soli i NUM_PARAM parametri d'esecuzione richiesti? */
-    if((check_n_param_return_value = check_n_param_in_exec_list()) != NUM_PARAM){
-        fprintf(stderr, "Master.c ERRORE nel numero di parametri presenti nel file di Settings.\nRichiesti:%d\nOttenuti:%d\n", NUM_PARAM, check_n_param_return_value);
-		exit(EXIT_FAILURE);
-    }
-
-    /* chiudo il file settings */
-    fclose(settings);
-
-#ifdef DEBUG
-    print_exec_param_list();
-#endif
-
-    SO_CAP_MIN = search_4_exec_param("SO_CAP_MIN");
-    SO_CAP_MAX = search_4_exec_param("SO_CAP_MAX");
-
-    SO_TIMENSEC_MIN = search_4_exec_param("SO_TIMENSEC_MIN");
-    SO_TIMENSEC_MAX = search_4_exec_param("SO_TIMENSEC_MAX");
-
     /* matrice che conterrà il numero di volte in cui ogni cella è stata attraversata. Inizializzata a 0. */
-    SO_TOP_CELLS = search_4_exec_param("SO_TOP_CELLS");
     SO_TOP_CELLS_MAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
     if (SO_TOP_CELLS_MAP == NULL)
         return;
@@ -206,11 +169,123 @@ void init(){
             SO_TOP_CELLS_MAP[i][j] = 0;
     }
 
-    SO_TIMEOUT = search_4_exec_param("SO_TIMEOUT");
 
-    /* inizializzo il vettore contenente i pid dei taxi */
+    /*-----------LEGGO I PARAMETRI DI ESECUZIONE-------------*/
+    /* inizializzo il random */
+    srand(time(NULL));
+    /* apro il file settings */
+    if((settings = fopen(SETTING_PATH , "r")) == NULL){
+        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
+		exit(EXIT_FAILURE);
+    }
+    for(i=0; i<NUM_PARAM; i++){
+        /* leggo ogni riga del file finché non raggiunge la fine EOF */
+        while(fscanf(settings, "%s = %s\n", name, value) != EOF)
+            listaParametri = insert_exec_param_into_list(name, value);
+    }
+
+    /* check: ho tutti e soli i NUM_PARAM parametri d'esecuzione richiesti? */
+    if((check_n_param_return_value = check_n_param_in_exec_list()) != NUM_PARAM){
+        fprintf(stderr, "Master.c ERRORE nel numero di parametri presenti nel file di Settings.\nRichiesti:%d\nOttenuti:%d\n", NUM_PARAM, check_n_param_return_value);
+		exit(EXIT_FAILURE);
+    }
+    /* chiudo il file settings */
+    fclose(settings);
+
+
+    /*ottengo i parametri d'esecuzione + check eventuali errori*/   
+    SO_TOP_CELLS = search_4_exec_param("SO_TOP_CELLS");
+    if(SO_TOP_CELLS == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_TOP_CELLS non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_TOP_CELLS<0){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_TOP_CELLS non consentito!\n\t[valori ammessi: >=0]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TOP_CELLS);
+        exit(0);
+    }
+
+    SO_CAP_MIN = search_4_exec_param("SO_CAP_MIN");
+    if(SO_CAP_MIN == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_CAP_MIN non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_CAP_MIN<=0){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_CAP_MIN non consentito!\n\t[valori ammessi: >0]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", SO_CAP_MIN);
+        exit(0);
+    }
+
+    SO_CAP_MAX = search_4_exec_param("SO_CAP_MAX");
+    if(SO_CAP_MAX== -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_CAP_MAX non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_CAP_MAX<=0 || (SO_CAP_MAX<SO_CAP_MIN)){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_CAP_MAX non consentito!\n\t[valori ammessi: >0 e >=SO_CAP_MIN(=%d)]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", SO_CAP_MIN, SO_CAP_MAX);
+        exit(0);
+    }
+
+    SO_TIMENSEC_MIN = search_4_exec_param("SO_TIMENSEC_MIN");
+    if(SO_TIMENSEC_MIN == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_TIMENSEC_MIN non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_TIMENSEC_MIN<=0){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_TIMENSEC_MIN non consentito!\n\t[valori ammessi: >0]\n\t[valore inserito: %ld]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TIMENSEC_MIN);
+        exit(0);
+    }
+    dprintf(1, "\nSO_TIMENSEC_MIN: %ld", SO_TIMENSEC_MIN);
+
+    SO_TIMENSEC_MAX = search_4_exec_param("SO_TIMENSEC_MAX");
+    if(SO_TIMENSEC_MAX == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_TIMENSEC_MAX non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_TIMENSEC_MAX<=0 || (SO_TIMENSEC_MAX<SO_TIMENSEC_MIN)){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_TIMENSEC_MAX non consentito!\n\t[valori ammessi: >0 e >=SO_TIMENSEC_MIN(%ld)]\n\t[valore inserito: %ld]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TIMENSEC_MIN, SO_TIMENSEC_MAX);
+        exit(0);
+    }
+    dprintf(1, "\nSO_TIMENSEC_MAX: %ld", SO_TIMENSEC_MIN);
+
+    SO_TIMEOUT = search_4_exec_param("SO_TIMEOUT");
+    if(SO_TIMEOUT == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_TIMEOUT non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_TIMEOUT<=0){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_TIMEOUT non consentito!\n\t[valori ammessi: >0]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TIMEOUT);
+        exit(0);
+    }
+
+    SO_DURATION = search_4_exec_param("SO_DURATION");
+    if(SO_DURATION == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_DURATION non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_DURATION <= 0){
+        forced_free_param_error();
+        dprintf(1, "\n\tvalore di SO_DURATION non consentito!\n\t[valori ammessi: >0]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", SO_DURATION);
+        exit(0);
+    }
+
     SO_TAXI = search_4_exec_param("SO_TAXI");
+    if(SO_TAXI == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_TAXI non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }else if(SO_TAXI > (SO_CAP_MIN*SO_HEIGHT*SO_WIDTH)){
+        forced_free_param_error();
+        dprintf(1, "\n\tNUMERO DI TAXI FUORI LIMITE!\n\t[valore massimo ammesso: SO_CAP_MIN*SO_HEIGHT*SO_WIDTH(=%d)]\n\t[valore inserito: %d]\n\t!ESECUZIONE TERMINATA!\n\n", (SO_CAP_MIN*SO_HEIGHT*SO_WIDTH), SO_TAXI);
+        exit(0);
+    }
+    /* inizializzo il vettore contenente i pid dei taxi */
     SO_TAXIS_PID = (pid_t *)malloc(SO_TAXI*sizeof(pid_t));
+    free_so_taxis_pid=1;
 
     for(i = 0; i < SO_HEIGHT; i++){
         for(j = 0; j < SO_WIDTH; j++){
@@ -221,8 +296,6 @@ void init(){
             SO_TIMENSEC_MAP[i][j] = SO_TIMENSEC_MIN + rand() % (SO_TIMENSEC_MAX - (SO_TIMENSEC_MIN - 1));
         }
     }   
-
-    SO_DURATION = search_4_exec_param("SO_DURATION"); 
 
     /* genero la mappa */
     map_generator();
@@ -249,60 +322,125 @@ void init(){
     taxi_processes_generator(SO_TAXI, 0);
 }
 
+void forced_free_param_error(){
+    free_mat();
+    free_param_list(listaParametri);
+    dprintf(1, KRED "");
+}
+
 void map_generator(){
+    int SO_HOLES;
+    int SO_SOURCES;
+
+    /*estraggo due parametri chiave per la mappa + check eventuale incorrettezza del dato*/
+    SO_HOLES = search_4_exec_param("SO_HOLES");
+    if(SO_HOLES == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_HOLES non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }
+    SO_SOURCES = search_4_exec_param("SO_SOURCES");
+    if(SO_SOURCES == -1){
+        forced_free_param_error();
+        dprintf(1, KRED "Parametro SO_SOURCES non trovato nella lista dei parametri!\n" RESET);
+		exit(0);
+    }
+    if((SO_WIDTH*SO_HEIGHT)<(SO_HOLES+SO_SOURCES)){
+        forced_free_param_error();
+        dprintf(1, "\n\tCOMBINAZIONE DI HOLES e SOURCES INVALIDA!\n\t[valore max ammesso: SO_WIDTH*SO_HEIGHT(=%d)]\n\t[attuale: %d]\n\t!ESECUZIONE TERMINATA!\n\n", (SO_WIDTH*SO_HEIGHT), (SO_HOLES+SO_SOURCES));
+        exit(0);
+    }
+    
+    /*check a buon fine. Inizializzazione vera e propria della mappa*/
     init_map();
-    assign_holes_cells();
-    assign_source_cells();
+    assign_holes_cells(SO_HOLES);
+    assign_source_cells(SO_SOURCES);
 }
 
 void init_map(){
     int i, j;
-    /*ctr=0;*/
     for (i = 0; i < SO_HEIGHT; i++){
         for (j = 0; j < SO_WIDTH; j++){
             map[i][j] = 1; /* rendo ogni cella vergine(no sorgente, no inaccessibile) */
-            /*dprintf(1, "\nindice: %d => [%d][%d]=%d", ctr, i, j, map[i][j]);
-            ctr++;*/
         } 
     }
 }
 
-void assign_holes_cells(){
-    int i, x, y, esito=0; /* valore restituito dalla check_cell_2be_inaccessible(): 0 -> cella non adatta ad essere inaccessibile per vincoli di progetto. 1 -> cella adatta ad essere inaccessibile */
-    int SO_HOLES;
+void assign_holes_cells(int SO_HOLES){
+    int i, j, x, y, esito=0; /* valore restituito dalla check_cell_2be_inaccessible(): 0 -> cella non adatta ad essere inaccessibile per vincoli di progetto. 1 -> cella adatta ad essere inaccessibile */
+    int **aus_map; /*evito loop indiniti appoggiandomi su questa mappa ausiliaria. cella=1 =>vergine. cella=0 =>gia considerata per diventare hole*/
+    int tot=0, aus_tot=0;
     srand(time(NULL)); /* inizializzo il random number generator */ 
 
-    /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo */
-    
-    if((SO_HOLES = search_4_exec_param("SO_HOLES")) == 0){
-        fprintf(stderr, "Parametro SO_HOLES non trovato nella lista dei parametri!\n");
-		exit(EXIT_FAILURE);
-    }
+    /*inizializzo la mappa ausiliaria che conterrà, per ogni assegnamento di HOLES sulla mappa, tutte le celle già prese in considerazione: evito loop infiniti*/
+    aus_map = (int**)malloc(SO_HEIGHT*sizeof(int *));
+    if (aus_map == NULL)
+        return;
+    for (i=0; i<SO_HEIGHT; i++){
+        aus_map[i] = malloc(SO_WIDTH*sizeof(int));
+        if (aus_map[i] == NULL)
+            return;
+        else{
+            for (j = 0; j < SO_WIDTH; j++){
+                aus_map[i][j] = 1; /*1 ->cella vergine, 0 ->cella appena estratta per diventare holes*/
+                tot++;
+            }
+        }
+    }    
+    aus_tot=tot;
 
     for (i = 0; i < SO_HOLES; i++){
         do{
-        
             x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */  
             y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */    
             if(map[x][y] != 0) /* se la cella non è già segnata come inaccessibile */
                 esito = check_cell_2be_inaccessible(x, y);
-        }while(esito == 0); /* finché non trovo una cella adatta ad essere definita inaccessibile */
-        map[x][y] = 0;  /* rendo effettivamente la cella inaccessibile */
-        esito = 0; 
+            
+            if(aus_map[x][y] != 0){
+                aus_map[x][y] = 0; /*segno la cella appena estratta sulla mappa ausiliaria*/
+                tot--; /*il numero totale di celle ancora considerabili diminuisce di 1*/
+            }
+        }while(esito == 0 && tot>0); /* finché non trovo una cella adatta ad essere definita inaccessibile. Tot>0 permette di evitare loop infiniti: quando tot vale 0 è perché ho gia provato ogni cella della mappa e non sono riuscito a piazzare l'hole. Concludo l'esecuzione */
+        if(tot != 0){
+            map[x][y] = 0;  /* rendo effettivamente la cella inaccessibile */
+            esito = 0; /*resetto l'esito*/
+            aus_map_util(aus_map, 1); /*pulisco la mappa*/
+            tot = aus_tot; /*resetto il numero di celle considerabili (saranno uguali a SO_HEIGHT*SO_WIDTH)*/
+        }else{
+            aus_map_util(aus_map, 0); /*eseguo le free di tutta la mem allocata dinamicamente fin ora*/
+            free_mat();
+            free_param_list(listaParametri);
+            /*TERMINO IL PROGRAMMA: NUMERO DI HOLES NON VALIDO!*/
+            dprintf(1, KRED "\n\tNUMERO DI HOLES INVALIDO!\n\t!ESECUZIONE TERMINATA!\n\n" RESET);
+            exit(0);
+        }        
+    }
+
+    aus_map_util(aus_map, 0); /*eseguo la free*/
+}
+
+void aus_map_util(int** aus_map, int request){
+    int i, j;
+    int *map_ptr;
+
+    if(request==0){/*eseguo la free della mappa*/
+        for (i = 0; i < SO_HEIGHT; i++){
+            map_ptr = aus_map[i];
+            free(map_ptr);
+        }
+        free(aus_map);
+    }else if(request==1){/*pulisco la mappa ausiliaria per poter essere sfruttata il prossimo ciclo di piazzamento di un hole*/
+        for (i = 0; i < SO_HEIGHT; i++){
+            for (j = 0; j < SO_WIDTH; j++)
+                aus_map[i][j] = 1;
+        }
     }
 }
 
-void assign_source_cells(){
+void assign_source_cells(int SO_SOURCES){
     int i, x, y;
-    int SO_SOURCES;
     int esito = 0;
     srand(time(NULL)); /* inizializzo il random number generator */ 
-    
-    /* estraggo il parametro dalla lista dei parametri; errore se non lo trovo. */
-    if((SO_SOURCES = search_4_exec_param("SO_SOURCES")) == 0){
-        fprintf(stderr, "Parametro SO_SOURCES non trovato nella lista dei parametri!\n");
-		exit(EXIT_FAILURE);
-    }
 
     /* dprintf(1,"\nSO_SOURCES estratti da settings: %d", SO_SOURCES); */
     
@@ -318,17 +456,12 @@ void assign_source_cells(){
         }while(!esito); /* finché la cella che sto considerando non viene marcata come sorgente */
         esito = 0;
     }
-
-    /* dprintf(1,"\nMAPPA STAMPATA SUBITO DOPO AVER ASSEGNATO I SOURCES...\n"); 
-    print_map(0);
-    dprintf(1,"\n",SO_SOURCES); */
 }
 
 void print_map(int isTerminal){
-    /* indici per ciclare */
     int i, k;
     double sec;
-    system("clear");
+    
     if(isTerminal){
         sec = (double)shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value/(double)1000000000;
         dprintf(1, "\nNumero totale di viaggi completati: %d", shd_mem_taxi_returned_values[0].completed_trips_counter); /* completed_trips_counter */
@@ -336,9 +469,9 @@ void print_map(int isTerminal){
         SO_TRIP_NOT_COMPLETED += buf.msg_qnum; /* messaggi di richiesta rimasti non considerati alla morte di tutti i figli: fanno parte dei viaggi inevasi */
         dprintf(1, "\nNumero totale di viaggi inevasi: %d", SO_TRIP_NOT_COMPLETED);
         dprintf(1, "\nNumero totale di viaggi abortiti: %d", SO_TRIP_ABORTED);
-        dprintf(1, "\nProcesso che ha fatto più strada in numero di celle: PID:%d ha attraversato %d celle", shd_mem_taxi_returned_values[5].pid, shd_mem_taxi_returned_values[2].total_n_cells_crossed_value); 
+        dprintf(1, "\nIl Taxi che ha percorso più strada (n celle): PID:%d ha attraversato %d celle", shd_mem_taxi_returned_values[5].pid, shd_mem_taxi_returned_values[2].total_n_cells_crossed_value); 
         dprintf(1, "\nIl Taxi %d ha fatto il viaggio più lungo nel servire una richiesta:\n\t%dns\n\t~%fs", shd_mem_taxi_returned_values[4].pid, shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value, sec);
-        dprintf(1, "\nIl Taxi %d ha raccolto più richieste/clienti; sono ben: %d\n", shd_mem_taxi_returned_values[6].pid, shd_mem_taxi_returned_values[3].max_trip_completed);  
+        dprintf(1, "\nIl Taxi %d ha raccolto più richieste/clienti: %d\n", shd_mem_taxi_returned_values[6].pid, shd_mem_taxi_returned_values[3].max_trip_completed);  
         get_top_cells();
     }
 
@@ -527,15 +660,22 @@ void taxi_processes_generator(int number, int aborted_pid){
     }
 }
 
-param_list insert_exec_param_into_list(char name[], int value){
+param_list insert_exec_param_into_list(char name[], char value[]){
     param_list new_elem;
     int esito = 1; /* controllo che non si stiano inserendo parametri doppi */
     esito = search_4_exec_param(name);
 
-    if(esito == 0){ /* se non ancora presente nella lista */
+    if(esito == -1){ /* se non ancora presente nella lista */
         /* genero un nuovo nodo(name,value) della lista e lo inserisco all'interno della stessa */
         new_elem = malloc(sizeof(*new_elem));
-        new_elem->value = value;
+        if(strcmp(new_elem->name, "SO_TIMENSEC_MIN") || strcmp(new_elem->name, "SO_TIMENSEC_MAX")){
+            if(strlen(value) > 9){
+                forced_free_param_error();
+                dprintf(1, "\n\tValore del parametro SO_TIMENSEC_* oltre limite consentito da vincoli di programma.\n\tValore massimo consentito dalla nanosleep: 999.999.999.\n\tValore inserito: %s\n\n", value);
+		        exit(0);
+            }
+        }
+        new_elem->value = atol(value);
         strcpy(new_elem->name, name);
         new_elem->next = listaParametri;
         return new_elem;
@@ -560,13 +700,14 @@ void print_exec_param_list(){
 
 long int search_4_exec_param(char nomeParam[]){
     param_list aus_param_list = listaParametri;
+
 	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
         if (strcmp(aus_param_list->name,nomeParam) == 0){
             return aus_param_list->value;
         }
 			
     }
-	return 0;
+	return -1;
 }
 
 int check_n_param_in_exec_list(){
@@ -644,6 +785,7 @@ void free_mat(){
     int *currentIntPtr;
     long int *currentLongPtr;
     pid_t *currentPid_tPtr;
+    
     /* free map 2d array */
     for (i = 0; i < SO_HEIGHT; i++){
         currentIntPtr = map[i];
@@ -661,6 +803,13 @@ void free_mat(){
         currentIntPtr = SO_TOP_CELLS_MAP[i];
         free(currentIntPtr);
     }
+    if(free_so_taxis_pid)
+        free(SO_TAXIS_PID);
+    free(map);
+    free(SO_CAP);
+    free(SO_TIMENSEC_MAP);
+    free(SO_SOURCES_PID);
+    free(SO_TOP_CELLS_MAP);
 }
 
 void execution(){
@@ -688,9 +837,11 @@ void execution(){
         if(WEXITSTATUS(status) == TAXI_NOT_COMPLETED_STATUS)
             SO_TRIP_NOT_COMPLETED++;
         else if(WEXITSTATUS(status) == TAXI_ABORTED_STATUS){
-            dprintf(1, KRED "\nTAXI ABORTITO!" RESET);
-            SO_TRIP_ABORTED++;
-            taxi_processes_generator(1, pid);
+            if(!sigquitsent){
+                /*dprintf(1, KRED "\nTAXI ABORTITO!" RESET);*/
+                SO_TRIP_ABORTED++;
+                taxi_processes_generator(1, pid);
+            }
         }
     }; /* aspetta che siano terminati tutti i suoi figli */
 
@@ -741,8 +892,6 @@ void signal_sigusr1_actions(){
 }
 
 void signal_handler(int sig){
-    int ret = -1;
-
     sigprocmask(SIG_BLOCK, &masked, NULL);
     switch (sig)
     {
@@ -764,10 +913,11 @@ void signal_handler(int sig){
         case SIGUSR1:
             if((child_who_does_user_request = select_a_child_to_do_the_request())==-1)
                 dprintf(1, "\nErrore sul SIGUSR1: nessun processo figlio ha preso in carico la richiesta. Riprova");
-            else
+            else{
                 dprintf(1, "\nHO SCELTO IL FIGLIO CON PID:%d\n",child_who_does_user_request);
                 kill(child_who_does_user_request, SIGUSR1);
                 TEST_ERROR;
+            }
             break;
         default:
             dprintf(1, "\nSignal %d not handled\n", sig);
@@ -791,6 +941,7 @@ int select_a_child_to_do_the_request(){
 void kill_all_children(){
     int i,j;
 
+    sigquitsent=1;
     for(i=0; i<SO_HEIGHT; i++){
         for(j=0; j<SO_WIDTH; j++){
             if(SO_SOURCES_PID[i][j] > 0)
@@ -889,7 +1040,7 @@ void init_msg_queue(){
 }
 
 void init_sem(){
-    int i, minC, maxC;
+    int i;
 
     /* semaforo message queue */
     sem_sync_id = semget(IPC_PRIVATE, 3, IPC_CREAT|IPC_EXCL| S_IRUSR | S_IWUSR);

@@ -27,7 +27,7 @@ void struct_to_map(); /* converte la struttura che contiene i valori della mappa
 void init_map(); /* inizializza la mappa locale a source */
 void signal_actions(); /* gestione dei segnali */ 
 void signal_handler(int sig); /* handler custom sui segnali gestiti */
-int generate_request();  /* metodo di supporto che genera e inserisce la richiesta nella coda di messaggi, con gestione relativi semafori di mutua esclusione */
+void generate_request();  /* metodo di supporto che genera e inserisce la richiesta nella coda di messaggi, con gestione relativi semafori di mutua esclusione */
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 void free_mat(); /* libero lo spazio allocato per la matrice map locale */
 void check_map_to_allow_requests(); /* controlla che nella mappa esista almeno una cella non source e non inaccessibile (che possa quindi essere scelta da destinazione per le richieste) */
@@ -70,6 +70,7 @@ void init(int argc, char *argv[]){
     int rand_seed;
 
     sigfillset(&all);
+    sigdelset(&all, SIGQUIT); /*in forse*/
 
     x = atoi(argv[1]); /* coordinata x del processo corrente, passatagli dal master */
     y = atoi(argv[2]); /* coordinata y del processo corrente, passatagli dal master */
@@ -191,29 +192,35 @@ void struct_to_map(){
     shmdt(shd_map);
 }
 
-int generate_request(){
+void generate_request(){
     int toX, toY, errn, esito; /* coordinate di arrivo della richiesta effettuata da source*/ 
     do
     {
         toX = rand() % SO_HEIGHT;
         toY = rand() % SO_WIDTH;
-    }while(map[toX][toY] != 1);
+    }while(map[toX][toY] == 0 || (toX==x && toY==y)); 
+    /*
+        0->cella inaccessibile
+        1->cella vergine
+        2->cella source
+    */
    
     /* inizializzo i parametri nel buffer */
     msg_buffer.mtype = (x * SO_WIDTH) + y + 1;
-    if (msg_buffer.mtype <= 0) {
-		fprintf(stderr, "\n%s: %d. parametro mtype di una coda di messaggi deve essere > 0. Tentato inserimento di: %d\n", __FILE__, __LINE__, ((x * SO_WIDTH) + y));
-		return(-1);
-	}
-    sprintf(msg_buffer.mtext, "%d", (toX * SO_WIDTH) + toY);;
+    if (msg_buffer.mtype <= 0){
+        fprintf(stderr, "\n%s: %d. parametro mtype di una coda di messaggi deve essere > 0. Tentato inserimento di: %d\n", __FILE__, __LINE__, ((x * SO_WIDTH) + y));
+        return;
+    }
+    sprintf(msg_buffer.mtext, "%d", (toX * SO_WIDTH) + toY);
 
     LOCK_SIGNALS;
     LOCK_QUEUE;
     
-    if(errn = msgsnd(msg_queue_id, &msg_buffer, MSG_LEN, 0)){
+    if( (errn = msgsnd(msg_queue_id, &msg_buffer, MSG_LEN, IPC_NOWAIT) )){ /*IPC_NOWAIT=>se la coda è piena non attendi e vai avanti*/
         if((esito = check_snd_msg_status(errn)) == -1)
             exit(esito);
     }
+    
     UNLOCK_QUEUE;
     UNLOCK_SIGNALS;
 }
@@ -230,47 +237,49 @@ void free_mat(){
 
 int check_snd_msg_status(int errn){
     switch (errno) {
-	case EAGAIN:
-		dprintf(STDERR_FILENO,
-			"Queue is full and IPC_NOWAIT was set to have a non-blocking msgsnd()\nFix it by:\n(1) making sure that some process read messages, or\n(2) changing the queue size by msgctl()\n");
-		return(-1);
-	case EACCES:
-		dprintf(STDERR_FILENO,
-	        "No write permission to the queue.\nFix it by adding permissions properly\n");
-		return(-1);
-	case EFAULT:
-		dprintf(STDERR_FILENO,
-			"The address of the message isn't accessible\n");
-		return(-1);
-	case EIDRM:
-		dprintf(STDERR_FILENO,
-			"The queue was removed\n");
-		return(-1);
-	case EINTR:
-		dprintf(STDERR_FILENO,
-			"The process got unblocked by a signal, while waiting on a full queue\n");
-		return(-1);
-	case EINVAL:
-		dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
-		return(-1);
-	case ENOMEM:
-		dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
-		return(-1);
-	default:
-		dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
+        case EAGAIN:
+            /*caso in cui la coda è piena e il tentato msgsnd prosegue senza aspettare che si liberi un posto.*/
+            return 0;
+        case EACCES:
+            dprintf(STDERR_FILENO,
+                "No write permission to the queue.\nFix it by adding permissions properly\n");
+            return(-1);
+        case EFAULT:
+            dprintf(STDERR_FILENO,
+                "The address of the message isn't accessible\n");
+            return(-1);
+        case EIDRM:
+            dprintf(STDERR_FILENO,
+                "The queue was removed\n");
+            return(-1);
+        case EINTR:
+            dprintf(STDERR_FILENO,
+                "The process got unblocked by a signal, while waiting on a full queue\n");
+            return(-1);
+        case EINVAL:
+            dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
+            return(-1);
+        case ENOMEM:
+            dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
+            return(-1);
+        default:
+            dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
+            return(-1);
 	}
 }
 
 void check_map_to_allow_requests(){
     int i, j, normal_cells_counter=0;
+    
     for (i = 0; i < SO_HEIGHT; i++){
         for (j = 0; j < SO_WIDTH; j++){
-            if(map[i][j] == 1)
+            if(map[i][j] != 0 && (i!=x && j!=y))
                 normal_cells_counter++;
+           
         }
     }
     if(normal_cells_counter == 0){
-        dprintf(1, "\nSource %d: no destinazioni possibili.\n", getpid());
+        dprintf(1, "\nSource %d: non ci sono destinazioni possibili.\n", getpid());
         /* attendo che tutti gli altri processi source siano pronti */
         s_queue_buff[0].sem_num = 1; 
         s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */

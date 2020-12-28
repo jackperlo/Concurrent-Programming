@@ -46,6 +46,10 @@ void return_values(); /*metodo che scrive la memoria condivisa di ritorno al pad
 void wait_for_syncronization(); /*metodo d'appoggio che attende la sincronizzazione di tutti i taxi*/
 
 int main(int argc, char *argv[]){
+    /* inizializzo i segnali e i relativi handler che andranno a gestirli */
+    /* messa prima di tutto perché se arriva la sigquit in un taxi abortito prima che sia settati gli handler, non saprebbe che fare con un sigquit */
+    signal_actions();
+
     /* controllo sul numero di parametri che il padre gli passa */
     if(argc != 9){ 
         fprintf(stderr, "\n%s: %d. ERRORE PASSAGGIO PARAMETRI.\nAspettati: 7\nRicevuti: %d\n", __FILE__, __LINE__, argc);
@@ -54,9 +58,6 @@ int main(int argc, char *argv[]){
 
     /* inizializzo la mappa che mi passa in shd mem il processo master */
     init(argc, argv); 
-    
-    /* inizializzo i segnali e i relativi handler che andranno a gestirli */
-    signal_actions();
 
     /* attendo che tutti gli altri taxi siano pronti per eseguire */
     wait_for_syncronization();
@@ -146,7 +147,7 @@ void signal_handler(int sig){
 }
 
 void init_maps(){
-    int i, j;
+    int i;
 
     map = (int **)malloc(SO_HEIGHT*sizeof(int *));
     if (map == NULL)
@@ -256,9 +257,10 @@ void print_map_specific(int** m, int isTerminal){
 
 int check_for_a_message_in_this_coordinates(int i, int j){
     int esito=0, data_size;
+
     LOCK_SIGNALS;
     LOCK_QUEUE;
-    if(data_size = msgrcv(msg_queue_id, &msg_buffer, MSG_LEN, ((i*SO_WIDTH)+j)+1, IPC_NOWAIT)){
+    if( (data_size = msgrcv(msg_queue_id, &msg_buffer, MSG_LEN, ((i*SO_WIDTH)+j)+1, IPC_NOWAIT) )){
         if(data_size <= 0 && errno!=ENOMSG)
             dprintf(1, "ERORRE LETTURA MSGSND: %d", errno);
         else if(data_size > 0){
@@ -282,7 +284,7 @@ int check_for_a_message_in_this_coordinates(int i, int j){
 }
 
 int get_trip(){
-    int ret_value=0, esito=0, errn, max=0, i=x, j=y, offset = 1, k, off_counter; /* cella di partenza: quella in cui si trova il taxi */
+    int esito=0, max=0, i=x, j=y, offset = 1, k, off_counter; /* cella di partenza: quella in cui si trova il taxi */
     
     /*
     propago la ricerca nelle celle piu vicine al Taxi 
@@ -346,7 +348,7 @@ int get_trip(){
 }
 
 void route_travel(int isToSource){
-    int possible = 0, action, time_tot_trip=0, crossed_cells=0, next, previous, old_position=0;
+    int action, time_tot_trip=0, old_position=0;
     struct timespec timer;
     timer.tv_sec = 0;
     trip_active=1;
@@ -408,6 +410,7 @@ void route_travel(int isToSource){
                 }else if(errno == EAGAIN){ /*gestione caso di deadlock per aver aspettato più di timeout*/
                     s_cells_buff[0].sem_num = (x*SO_WIDTH)+y; s_cells_buff[0].sem_op = 1;
                     while(semop(sem_cells_id, s_cells_buff, 1) == -1 && errno == EINTR);
+                    return_values();
                     free_mat();
                     exit(TAXI_ABORTED_STATUS);
                 }else{/* reverses operation */
@@ -478,6 +481,7 @@ int check_rcv_msg_status(int errn){
         return(1);
 	default:
 		dprintf(STDERR_FILENO, "%s:%d: PID=%5d: Error %d (%s)\n", __FILE__, __LINE__, getpid(), errno, strerror(errno));
+        return(-1);
 	}
 }
 
@@ -506,17 +510,18 @@ void return_values(){
 }
 
 void wait_for_syncronization(){
+    /*controllo con l'if per i taxi abortiti che non devono attendere nessun altro taxi per partire con l'esecuzione*/
     int sem_status = 1;
-    sem_status = semctl(sem_sync_id, 1, GETVAL);
+    sem_status = semctl(sem_sync_id, 1, GETVAL); 
     /* attendo che tutti gli altri processi taxi siano pronti */
-    if( sem_status > 0){
-    s_queue_buff[0].sem_num = 1; 
-    s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-    s_queue_buff[0].sem_num = 1;
-    s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+    if( sem_status > 0){ 
+        s_queue_buff[0].sem_num = 1; 
+        s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
+        s_queue_buff[0].sem_flg = 0;
+        while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
+        s_queue_buff[0].sem_num = 1;
+        s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
+        s_queue_buff[0].sem_flg = 0;
+        while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
     }
 }

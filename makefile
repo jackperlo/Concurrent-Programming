@@ -1,6 +1,5 @@
 #flag di compilazione
-COMPILATION_FLAGS= -std=c89 -pedantic -D_GNU_SOURCE
-#-Wall -Werror
+COMPILATION_FLAGS= -std=c89 -pedantic -D_GNU_SOURCE -Wall -Werror
 
 #object file necessari per produrre l’eseguibile
 OBJMASTER = Master.c 
@@ -9,10 +8,10 @@ OBJSOURCE = Source.c
 OBJCOMMON = Common.h
 TARGET = Master
 ifndef SO_WIDTH
-	SO_WIDTH = 20
+	SO_WIDTH = 60
 endif
 ifndef SO_HEIGHT
-	SO_HEIGHT = 10
+	SO_HEIGHT = 20
 endif
 
 $(TARGET): $(OBJMASTER) $(OBJTAXI) $(OBJSOURCE) $(OBJCOMMON)

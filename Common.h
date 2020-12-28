@@ -42,6 +42,13 @@
 #define GOTO_SOURCE 1
 
 int **map; /* puntatore a matrice che determina la mappa in esecuzione */
+						/*VALORI POSSIBILI NELLA MAPPA:*/
+						/*
+								0->cella inaccessibile
+								1->cella vergine
+								2->cella source
+						*/
+					
 long int **SO_TIMENSEC_MAP; /* puntatore a matrice dei tempi di attesa per ogni cella */
 int **SO_TOP_CELLS_MAP; /* matrice che contiene per ogni cella il numero di volte in cui la cella è stata attraversata */
 
