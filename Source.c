@@ -1,19 +1,6 @@
 #include "Common.h"
 
-/* define richiamata dalla macro TESTERROR definita in common */
-#define CLEAN
-
 #define EXIT_FAILURE_CUSTOM -1
-
-/* blocca e sblocca tutti i segnali */
-#define LOCK_SIGNALS sigprocmask(SIG_BLOCK, &all, NULL);
-#define UNLOCK_SIGNALS sigprocmask(SIG_UNBLOCK, &all, NULL);
-
-/* semaforo di mutua esclusione sulla scrittura in coda di messaggi */
-#define LOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
-                   while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-#define UNLOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = 1; s_queue_buff[0].sem_flg = 0; \
-                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 
 int x, y;
 int timing = 1; /* inizializzazione tempo random dopo cui effettuare la prossima richiesta */
@@ -21,6 +8,8 @@ int requests = 0; /* numero di richieste effettuate da questo sorgente */
 int msg_queue_id = 0; /* id del semaforo per la coda di messaggi */
 sigset_t masked, all; /* maschere per i segnali */ 
 values_to_source *shd_map; /* matrice sottoforma di array di stuct che contiene il solo valore della cella, allocata in shd mem e passata dal master */
+struct msgbuf msg_buffer; /*contenitore messaggi presenti in coda di messagi*/
+int sem_sync_id = 0; /*id semaforo per mutua esclusione su coda di messaggi*/
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_map(); /* converte la struttura che contiene i valori della mappa condivisa passata dalla shd mem in una mappa locale (int **map) */
@@ -31,7 +20,6 @@ void generate_request();  /* metodo di supporto che genera e inserisce la richie
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
 void free_mat(); /* libero lo spazio allocato per la matrice map locale */
 void check_map_to_allow_requests(); /* controlla che nella mappa esista almeno una cella non source e non inaccessibile (che possa quindi essere scelta da destinazione per le richieste) */
-void wait_for_syncronization(); /*metodo d'appoggio che attende la sincronizzazione di tutti i source*/
 
 int main(int argc, char *argv[]){
     /* controllo sul numero di parametri che il padre gli passa */
@@ -50,7 +38,7 @@ int main(int argc, char *argv[]){
     check_map_to_allow_requests();
 
     /* attendo che tutti gli altri taxi siano pronti per eseguire */
-    wait_for_syncronization();
+    wait_for_syncronization(sem_sync_id);
 
     /* INIZIO ESECUZIONE DEI SOURCE */
 
@@ -213,16 +201,16 @@ void generate_request(){
     }
     sprintf(msg_buffer.mtext, "%d", (toX * SO_WIDTH) + toY);
 
-    LOCK_SIGNALS;
-    LOCK_QUEUE;
+    lock_signals(all);
+    lock_queue_semaphore(sem_sync_id);
     
     if( (errn = msgsnd(msg_queue_id, &msg_buffer, MSG_LEN, IPC_NOWAIT) )){ /*IPC_NOWAIT=>se la coda è piena non attendi e vai avanti*/
         if((esito = check_snd_msg_status(errn)) == -1)
             exit(esito);
     }
     
-    UNLOCK_QUEUE;
-    UNLOCK_SIGNALS;
+    unlock_queue_semaphore(sem_sync_id);
+    unlock_signals(all);
 }
 
 void free_mat(){
@@ -287,16 +275,4 @@ void check_map_to_allow_requests(){
         while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
         raise(SIGQUIT);
     }    
-}
-
-void wait_for_syncronization(){
-    /* attendo che tutti gli altri processi source siano pronti */
-    s_queue_buff[0].sem_num = 1; 
-    s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-    s_queue_buff[0].sem_num = 1;
-    s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
-    s_queue_buff[0].sem_flg = 0;
-    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 }

@@ -1,24 +1,6 @@
 #include "Common.h"
 
-/* define richiamata dalla macro TESTERROR definita in common */
-#define CLEAN
-
 #define EXIT_FAILURE_CUSTOM -1
-
-/* blocca e sblocca tutti i segnali */
-#define LOCK_SIGNALS sigprocmask(SIG_BLOCK, &all, NULL);
-#define UNLOCK_SIGNALS sigprocmask(SIG_UNBLOCK, &all, NULL);
-
-/* semaforo di mutua esclusione sulla scrittura in coda di messaggi */
-#define LOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
-                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-#define UNLOCK_QUEUE s_queue_buff[0].sem_num = 0; s_queue_buff[0].sem_op = 1; s_queue_buff[0].sem_flg = 0; \
-                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-
-#define LOCK_RETURN s_queue_buff[0].sem_num = 2; s_queue_buff[0].sem_op = -1; s_queue_buff[0].sem_flg = 0; \
-                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-#define UNLOCK_RETURN s_queue_buff[0].sem_num = 2; s_queue_buff[0].sem_op = 1; s_queue_buff[0].sem_flg = 0; \
-                    while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
 
 int x, y; /* coordinate in cui si trova il taxi considerato */
 int msg_queue_id = 0, trip_cell_counter=0; /* id del semaforo per la coda di messaggi */
@@ -26,26 +8,26 @@ int toX, toY; /* coordinate di destinazione taxi */
 sigset_t masked, all; /* maschere per i segnali */ 
 values_to_taxi *shd_mem_values_to_taxi; /* shd mem che mi passa i valori di map e so_timensec_map dal processo padre */
 taxi_returned_values *aus_shd_mem_taxi_returned_values; /* struct locale utile per aggiornare in locale i valori dei parametri da ritornare: sarà copiata in mutex nella shd mem di ritorno alla morte del processo */
-/* array di union configurato cosi: (vedi relativa union in common.h) */
 taxi_returned_values *shd_mem_taxi_returned_values; /* shd mem dove aggiornerò i valori da ritornare una volta morto */
 int trip_active=0; /*se c'è un viaggio in corso */
+struct msgbuf msg_buffer; /* struttura del buffer della coda di messaggi */
+int sem_sync_id = 0; /*id semaforo mutua esclusione per coda di messaggi, shd mem, sincronizzazione*/
+int sem_cells_id = 0;  /*id semaforo contatore per capacita di ogni cella*/
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_maps(); /* converte la struttura che contiene i valori delle mappe condivise passata dalla shd mem nelle due mappe locali relative: (int **map) (int **SO_TIMENSEC_MAP) */
 void init_maps(); /* inizializza le mappa locali ai taxi e i parametri da ritornare */ 
-void print_map(int isTerminal); /* stampa della mappa */
 void signal_actions(); /* gestione dei segnali */ 
 void signal_handler(int sig); /* handlers custom sui segnali gestiti*/
-void print_map_specific(int** m, int isTerminal); /* stampa la mappa specificata come parametro */
 void free_mat(); /* free dello spazio allocato con la malloc per le tre matrici locali */
 void route_travel(int isToSource); /* gestisce il viaggio dei taxi e gestione dei suoi parametri */
 int get_trip(); /* gestione della presa in carico di una richiesta */
 int check_rcv_msg_status(int errn); /* check dell'avvenuta lettura da coda di messaggi */
 int check_for_a_message_in_this_coordinates(int i, int j); /* metodo ausiliare per il check di un messaggio da parte di un source della coordinata passata come parametro */
 void return_values(); /*metodo che scrive la memoria condivisa di ritorno al padre. Richiamata quando il processo termina*/
-void wait_for_syncronization(); /*metodo d'appoggio che attende la sincronizzazione di tutti i taxi*/
 
 int main(int argc, char *argv[]){
+    int search_for_a_trip = 0;
     /* inizializzo i segnali e i relativi handler che andranno a gestirli */
     /* messa prima di tutto perché se arriva la sigquit in un taxi abortito prima che sia settati gli handler, non saprebbe che fare con un sigquit */
     signal_actions();
@@ -60,13 +42,13 @@ int main(int argc, char *argv[]){
     init(argc, argv); 
 
     /* attendo che tutti gli altri taxi siano pronti per eseguire */
-    wait_for_syncronization();
+    wait_for_syncronization(sem_sync_id);
 
     while (1)
     {
-        if(!get_trip()){
+        search_for_a_trip = get_trip();
+        if(!search_for_a_trip)
             sleep(1);
-        }
     }
 
     return(-1);
@@ -85,7 +67,7 @@ void init(int argc, char *argv[]){
 
     msg_queue_id = atoi(argv[4]); /* id coda di messaggi per parlare coi proc source */
     sem_sync_id = atoi(argv[5]); /* semaforo di sincronizzazione per lo start dell'esecuzione */
-    sem_cells_id = atoi(argv[8]);
+    sem_cells_id = atoi(argv[8]); /* semaforo per capacita massima taxi per ogni singola cella */
 
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
         fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
@@ -203,63 +185,12 @@ void free_mat(){
     free(aus_shd_mem_taxi_returned_values);
 }
 
-/* PER TEST DA CANCELLARE AL TERMINE */
-
-void print_map(int isTerminal){
-    /* indici per ciclare */
-    int i, k;
-    /* cicla per tutti gli elementi della mappa */
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            switch (map[i][k])
-            {
-            /* CASO 0: cella invalida, quadratino nero */
-            case 0:
-                printf( BGRED KBLACK "|_|" RESET);
-                break;
-            /* CASO 1: cella di passaggio valida, non sorgente, quadratino bianco */
-            case 1:
-                printf("|_|" RESET);
-                break;
-            /* CASO 2: cella sorgente, quadratino striato se stiamo stampando l'ultima mappa, altrimenti stampo una cella generica bianca*/
-            case 2:
-                if(isTerminal)
-                    printf( BGGREEN KBLACK "|_|" RESET);
-                else
-                    printf("|_|");
-                break;
-            /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
-            default:
-                if(isTerminal)
-                    printf(BGMAGENTA "|_|" RESET);
-                else
-                    printf("|%c",(char)map[i][k]);
-                break;
-            }
-        }
-        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("|\n");
-    }
-}
-
-void print_map_specific(int** m, int isTerminal){
-    /* indici per ciclare */
-    int i, k;
-    /* cicla per tutti gli elementi della mappa */
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            printf("|%d", m[i][k]);
-        }
-        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("|\n");
-    }
-}
-
 int check_for_a_message_in_this_coordinates(int i, int j){
     int esito=0, data_size;
 
-    LOCK_SIGNALS;
-    LOCK_QUEUE;
+    lock_signals(all);
+    lock_queue_semaphore(sem_sync_id);
+
     if( (data_size = msgrcv(msg_queue_id, &msg_buffer, MSG_LEN, ((i*SO_WIDTH)+j)+1, IPC_NOWAIT) )){
         if(data_size <= 0 && errno!=ENOMSG)
             dprintf(1, "ERORRE LETTURA MSGSND: %d", errno);
@@ -268,15 +199,16 @@ int check_for_a_message_in_this_coordinates(int i, int j){
         }
     }else
         esito = 0; /* non ho trovato un messaggio in queste coordinate */
-    UNLOCK_QUEUE;
-    UNLOCK_SIGNALS; 
     
+    unlock_queue_semaphore(sem_sync_id);
+    unlock_signals(all);
+   
     if (esito)
     {
         toX = i;
         toY = j;
-        route_travel(GOTO_SOURCE);
-        toX = atoi(msg_buffer.mtext) / SO_WIDTH;
+        route_travel(GOTO_SOURCE); /*mi muovo prima verso il source*/
+        toX = atoi(msg_buffer.mtext) / SO_WIDTH; /* e successivamente verso la destinazione*/
         toY = atoi(msg_buffer.mtext) % SO_WIDTH;
     }
     
@@ -348,64 +280,99 @@ int get_trip(){
 }
 
 void route_travel(int isToSource){
-    int action, time_tot_trip=0, old_position=0;
+    int action, time_tot_trip=0, not_permitted_action=-1, deadlock_res=-1, myrand;
     struct timespec timer;
+    
     timer.tv_sec = 0;
     trip_active=1;
     s_cells_buff[0].sem_op = 1; s_cells_buff[0].sem_flg = 0;
     s_cells_buff[1].sem_op = -1; s_cells_buff[1].sem_flg = 0;
+
     while(trip_active){
         s_cells_buff[0].sem_num = (x*SO_WIDTH)+y;
-        if(x < toX && (((x+1)*SO_WIDTH)+y) != old_position){ /*prossima cella => basso */
-            if(map[x+1][y] != 0)
+        
+        if(x < toX){ /*prossima cella => basso */
+
+            if((map[x+1][y] != 0) && (not_permitted_action != 0))
                 action = 0;                 
-            else if((y+1)<SO_WIDTH && map[x][y+1] != 0)
-                action = 2; 
-            else if((y-1)>=0 && map[x][y-1] != 0)
-                action = 3; 
-        }else if(x > toX && (((x-1)*SO_WIDTH)+y) != old_position){ /*prossima cella => alto */
-            if(map[x-1][y] != 0)
+            else{
+                srand(time(NULL));
+                myrand=rand() % 100000;
+                
+                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand <= 50000))
+                    action = 2; 
+                else if(((y-1)>=0) && (map[x][y-1] != 0) && (not_permitted_action != 3))
+                    action = 3; 
+            }
+
+        }else if(x > toX){ /*prossima cella => alto */
+
+            if((map[x-1][y] != 0) && (not_permitted_action != 1))
                 action = 1;
-            else if((y+1)<SO_WIDTH && map[x][y+1] != 0)
-                action = 2; 
-            else if((y-1)>=0 && map[x][y-1] != 0)
-                action = 3;     
-        }else if(y < toY && (x*SO_WIDTH)+(y+1) != old_position){ /*prossima cella => destra */
-            if(map[x][y+1] != 0)
+            else {
+                srand(time(NULL));
+                myrand=rand() % 100000;
+
+                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand >= 50000))
+                    action = 2; 
+                else if(((y-1)>=0) && (map[x][y-1] != 0) && (not_permitted_action != 3))
+                    action = 3;     
+            }
+
+        }else if(y < toY){ /*prossima cella => destra */
+
+            if((map[x][y+1] != 0) && (not_permitted_action != 2))
                 action = 2;
-            else if((x+1)<SO_HEIGHT && map[x+1][y] != 0)
-                action = 0; 
-            else if((x-1)>=0 && map[x-1][y] != 0)
-                action = 1;  
-        }else if(y > toY && (x*SO_WIDTH)+(y-1) != old_position){ /*prossima cella => sinistra */
-            if(map[x][y-1] != 0)
+            else {
+                srand(time(NULL));
+                myrand=rand() % 100000;
+
+                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand <= 50000))
+                    action = 0; 
+                else if(((x-1)>=0) && (map[x-1][y] != 0) && (not_permitted_action != 1))
+                    action = 1;  
+            }
+
+        }else if(y > toY){ /*prossima cella => sinistra */
+
+            if((map[x][y-1] != 0) && (not_permitted_action != 3))
                 action = 3;
-            else if((x+1)<SO_HEIGHT && map[x+1][y] != 0)
-                action = 0; 
-            else if((x-1)>=0 && map[x-1][y] != 0)
-                action = 1;  
-        }else if(y==toY && x==toX)
+            else {
+                srand(time(NULL));
+                myrand=rand() % 100000;
+
+                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand >= 50000))
+                    action = 0; 
+                else if(((x-1)>=0) && (map[x-1][y] != 0) && (not_permitted_action != 1))
+                    action = 1;  
+            }
+        }else if(y==toY && x==toX){
             trip_active=0;
+        }
 
         if(trip_active){
-            old_position = (x*SO_WIDTH) + y;
             switch (action){
                 case 0:
                     x++;
+                    not_permitted_action=1; /*la prossima azione può fare tutto tranne che la mossa inversa di quella appena fatta (es. faccio x++, prossima mossa non potrà essere x--) evito loop*/
                     break;
                 case 1:
                     x--;
+                    not_permitted_action=0;
                     break;
                 case 2:
                     y++;
+                    not_permitted_action=3;
                     break;
                 case 3:
                     y--;
+                    not_permitted_action=2;
                     break;
             }
             s_cells_buff[1].sem_num = (x*SO_WIDTH)+y;
-            if(semtimedop(sem_cells_id, s_cells_buff, 2, &timeout) == -1){
-                if(errno != EINTR && errno != EAGAIN){
+            deadlock_res = semtimedop(sem_cells_id, s_cells_buff, 2, &timeout);
+            if(deadlock_res == -1){
+                if(errno != EINTR && errno != EAGAIN && errno != 27){
                     TEST_ERROR;
                 }else if(errno == EAGAIN){ /*gestione caso di deadlock per aver aspettato più di timeout*/
                     s_cells_buff[0].sem_num = (x*SO_WIDTH)+y; s_cells_buff[0].sem_op = 1;
@@ -414,7 +381,6 @@ void route_travel(int isToSource){
                     free_mat();
                     exit(TAXI_ABORTED_STATUS);
                 }else{/* reverses operation */
-                    dprintf(1, KRED "\nREVERSE ACTION!\n" RESET);
                     switch (action){
                         case 0:
                             x--;
@@ -431,7 +397,7 @@ void route_travel(int isToSource){
                     }
                 }
             }else{
-                aus_shd_mem_taxi_returned_values[(x*SO_WIDTH)+y].cell_crossed_map_counter++;
+                aus_shd_mem_taxi_returned_values[(x*SO_WIDTH)+y+7].cell_crossed_map_counter++;
                 if(!isToSource){
                     time_tot_trip += SO_TIMENSEC_MAP[x][y];
                 }
@@ -443,7 +409,6 @@ void route_travel(int isToSource){
     }
     if(!isToSource){
         aus_shd_mem_taxi_returned_values[0].completed_trips_counter++;
-        aus_shd_mem_taxi_returned_values[3].max_trip_completed++;
         if(time_tot_trip > aus_shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value)
             aus_shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value = time_tot_trip;
     }    
@@ -489,8 +454,9 @@ int check_rcv_msg_status(int errn){
 /* taxi_returned_values = [completed_trips_counter, max_timensec_complete_trip_value, total_n_cells_crossed_value, max_trip_completed, pid [0], pid [1], pid [2], cell_crossed_map_counter[0], cell_crossed_map_counter[1], ...]; */
 void return_values(){
     int i;
-    LOCK_RETURN;
-    shd_mem_taxi_returned_values[0].completed_trips_counter += aus_shd_mem_taxi_returned_values[0].completed_trips_counter;
+    
+    lock_taxi_return_shd_mem_semaphore(sem_sync_id);
+    shd_mem_taxi_returned_values[0].completed_trips_counter = shd_mem_taxi_returned_values[0].completed_trips_counter + aus_shd_mem_taxi_returned_values[0].completed_trips_counter;
     if(shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value < aus_shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value){
         shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value = aus_shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value;
         shd_mem_taxi_returned_values[4].pid = getpid();
@@ -499,29 +465,11 @@ void return_values(){
         shd_mem_taxi_returned_values[2].total_n_cells_crossed_value = aus_shd_mem_taxi_returned_values[2].total_n_cells_crossed_value;
         shd_mem_taxi_returned_values[5].pid = getpid();
     }
-    if(shd_mem_taxi_returned_values[3].max_trip_completed < aus_shd_mem_taxi_returned_values[3].max_trip_completed){
-        shd_mem_taxi_returned_values[3].max_trip_completed = aus_shd_mem_taxi_returned_values[3].max_trip_completed;
+    if(shd_mem_taxi_returned_values[3].max_trip_completed < aus_shd_mem_taxi_returned_values[0].completed_trips_counter){
+        shd_mem_taxi_returned_values[3].max_trip_completed = aus_shd_mem_taxi_returned_values[0].completed_trips_counter;
         shd_mem_taxi_returned_values[6].pid = getpid();
     }
-    for(i = 7; i < (7+(SO_WIDTH*SO_HEIGHT)); i++){
+    for(i = 7; i < (7+(SO_WIDTH*SO_HEIGHT)); i++)
         shd_mem_taxi_returned_values[i].cell_crossed_map_counter += aus_shd_mem_taxi_returned_values[i].cell_crossed_map_counter;
-    }
-    UNLOCK_RETURN;
-}
-
-void wait_for_syncronization(){
-    /*controllo con l'if per i taxi abortiti che non devono attendere nessun altro taxi per partire con l'esecuzione*/
-    int sem_status = 1;
-    sem_status = semctl(sem_sync_id, 1, GETVAL); 
-    /* attendo che tutti gli altri processi taxi siano pronti */
-    if( sem_status > 0){ 
-        s_queue_buff[0].sem_num = 1; 
-        s_queue_buff[0].sem_op = -1; /* decrementa il semaforo di 1 */
-        s_queue_buff[0].sem_flg = 0;
-        while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-        s_queue_buff[0].sem_num = 1;
-        s_queue_buff[0].sem_op = 0; /* attende che il semaforo sia uguale a 0 */
-        s_queue_buff[0].sem_flg = 0;
-        while(semop(sem_sync_id, s_queue_buff, 1)==-1){if(errno!=EINTR)TEST_ERROR;}
-    }
+    unlock_taxi_return_shd_mem_semaphore(sem_sync_id);   
 }

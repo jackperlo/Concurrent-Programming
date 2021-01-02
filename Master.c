@@ -5,12 +5,12 @@
 #define TAXI "./Taxi"
 #define SOURCE "./Source"  
 /* path e numero di parametri del file di configurazione per variabili definite a tempo d'esecuzione */
-#define SETTING_PATH "./settings"
+#define SETTING_PATH "./Settings"
 #define NUM_PARAM 10
 /* define richiamata dalla macro TESTERROR definita in common*/
+#undef CLEAN
 #define CLEAN cleaner();
 
-/*------------DICHIARAZIONE METODI------------*/
 void init(); /* inizializzazione delle variabili */
 void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SOURCES */
 void forced_free_param_error(); /*free delle strutture dati forzata causa incorrettezza parametri d'esecuzione estratti*/
@@ -42,7 +42,6 @@ void init_shd_mem(int dim, int isTaxi); /* metodo d'appoggio che raccoglie l'ini
 void maps_to_struct(int dim, int extended_mapping); /* extended_mapping: 0 => convert MAP in struct */
                                                     /* extended_mapping: 1 => converte MAP, SO_TIMENSEC_MAP, SO_TOP_CELLS_MAP in una struttura che contiene i rispettivi valori divisi per mappa e per cella*/
 
-/*-------------VARIABILI GLOBALI-------------*/
 int SO_TAXI; /* numero di taxi presenti nella sessione in esecuzione */
 int SO_CAP_MIN; /* capacità minima assumibile da SO_CAP: determina il minimo numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
 int SO_CAP_MAX; /* capacità massima assumibile da SO_CAP: determina il MASSIMO numero che può assumere il valore che identifica il massimo numero di taxi che possono trovarsi in una cella contemporaneamente */
@@ -72,29 +71,37 @@ int SO_TOP_REQ; /* processo che ha completato più request di clienti */
 int SO_TRIP_ABORTED; /* numero di viaggi totali abortiti a causa del deadlock di un qualche taxi */
 int sigquitsent=0; /*mi dice se è già stata inviata una sigquit (=1), 0 altrimenti*/
 int free_so_taxis_pid=0; /*utile per una free specifica nel free_mat*/
+union semun {
+    int val;    /* Value for SETVAL */
+    struct semid_ds *buf;    /* Buffer for IPC_STAT, IPC_SET */
+    unsigned short  *array;  /* Array for GETALL, SETALL */
+    struct seminfo  *__buf;  /* Buffer for IPC_INFO*/
+};
+union semun sem_arg;
+int sem_sync_id = 0; 
+int sem_cells_id = 0; 
 
 /* funzioni e struttura dati per lettura e gestione parametri su file */
 typedef struct node {
+    char name[16];
 	long int value;
-	char name[20];
-	struct node * next;  
+	struct node *next;  
 } node;
-typedef node* param_list; /* conterrà la lista dei parametri passati tramite file di settings */
+typedef node *param_list; /* conterrà la lista dei parametri passati tramite file di settings */
 param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
 param_list insert_exec_param_into_list(char name[], char value[]); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
-void print_exec_param_list(); /* stampa la lista dei parametri d'esecuzione */
-long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro pssatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
+long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro passatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
 void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
 int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 
 int main(int argc, char *argv[]){
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
-        fprintf(stderr, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
+        dprintf(1, "PARAMETRI DI COMPILAZIONE INVALIDI. SO_WIDTH o SO_HEIGHT <= 0.\n");
 		exit(EXIT_FAILURE);
     }
 
-    /* per lanciare la richiesta da temrinale: kill -SIGUSR1 <Master-PID> */
+    /* per lanciare la richiesta da temrminale: kill -SIGUSR1 <Master-PID> */
     /* stampo il PID del master per essere sfruttato nell'invio del SIGUSR1 */
     dprintf(1, "\nMASTER PROCESS NAME: %d\n", getpid());
 
@@ -157,25 +164,13 @@ void init(){
             SO_SOURCES_PID[i][j] = 0;
     }
 
-    /* matrice che conterrà il numero di volte in cui ogni cella è stata attraversata. Inizializzata a 0. */
-    SO_TOP_CELLS_MAP = (int **)malloc(SO_HEIGHT*sizeof(int *));
-    if (SO_TOP_CELLS_MAP == NULL)
-        return;
-    for (i=0; i<SO_HEIGHT; i++){
-        SO_TOP_CELLS_MAP[i] = malloc(SO_WIDTH*sizeof(int));
-        if (SO_TOP_CELLS_MAP[i] == NULL)
-            return;
-        for(j=0; j<SO_WIDTH; j++)
-            SO_TOP_CELLS_MAP[i][j] = 0;
-    }
-
 
     /*-----------LEGGO I PARAMETRI DI ESECUZIONE-------------*/
     /* inizializzo il random */
     srand(time(NULL));
     /* apro il file settings */
     if((settings = fopen(SETTING_PATH , "r")) == NULL){
-        fprintf(stderr, "Errore durante l'apertura file che contiene i parametri\n");
+        dprintf(1, "Errore durante l'apertura file che contiene i parametri\n");
 		exit(EXIT_FAILURE);
     }
     for(i=0; i<NUM_PARAM; i++){
@@ -186,8 +181,9 @@ void init(){
 
     /* check: ho tutti e soli i NUM_PARAM parametri d'esecuzione richiesti? */
     if((check_n_param_return_value = check_n_param_in_exec_list()) != NUM_PARAM){
-        fprintf(stderr, "Master.c ERRORE nel numero di parametri presenti nel file di Settings.\nRichiesti:%d\nOttenuti:%d\n", NUM_PARAM, check_n_param_return_value);
-		exit(EXIT_FAILURE);
+        dprintf(1, KRED "");
+        dprintf(1, "\n\tMaster.c ERRORE nel numero o nella configurazione dei parametri presenti nel file di Settings.\n\tDeve rispettare la scrittura: NOME = VALORE\n\tRichiesti:%d\n\tOttenuti:%d\n\n", NUM_PARAM, check_n_param_return_value);
+		exit(0);
     }
     /* chiudo il file settings */
     fclose(settings);
@@ -237,7 +233,6 @@ void init(){
         dprintf(1, "\n\tvalore di SO_TIMENSEC_MIN non consentito!\n\t[valori ammessi: >0]\n\t[valore inserito: %ld]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TIMENSEC_MIN);
         exit(0);
     }
-    dprintf(1, "\nSO_TIMENSEC_MIN: %ld", SO_TIMENSEC_MIN);
 
     SO_TIMENSEC_MAX = search_4_exec_param("SO_TIMENSEC_MAX");
     if(SO_TIMENSEC_MAX == -1){
@@ -249,7 +244,6 @@ void init(){
         dprintf(1, "\n\tvalore di SO_TIMENSEC_MAX non consentito!\n\t[valori ammessi: >0 e >=SO_TIMENSEC_MIN(%ld)]\n\t[valore inserito: %ld]\n\t!ESECUZIONE TERMINATA!\n\n", SO_TIMENSEC_MIN, SO_TIMENSEC_MAX);
         exit(0);
     }
-    dprintf(1, "\nSO_TIMENSEC_MAX: %ld", SO_TIMENSEC_MIN);
 
     SO_TIMEOUT = search_4_exec_param("SO_TIMEOUT");
     if(SO_TIMEOUT == -1){
@@ -411,7 +405,7 @@ void assign_holes_cells(int SO_HOLES){
             free_mat();
             free_param_list(listaParametri);
             /*TERMINO IL PROGRAMMA: NUMERO DI HOLES NON VALIDO!*/
-            dprintf(1, KRED "\n\tNUMERO DI HOLES INVALIDO!\n\t!ESECUZIONE TERMINATA!\n\n" RESET);
+            dprintf(1, KRED "\n\tNUMERO DI HOLES INVALIDO!\n\tPROVARE A DIMINUIRILI\n\t!ESECUZIONE TERMINATA!\n\n" RESET);
             exit(0);
         }        
     }
@@ -441,14 +435,12 @@ void assign_source_cells(int SO_SOURCES){
     int i, x, y;
     int esito = 0;
     srand(time(NULL)); /* inizializzo il random number generator */ 
-
-    /* dprintf(1,"\nSO_SOURCES estratti da settings: %d", SO_SOURCES); */
     
     for (i = 0; i < SO_SOURCES; i++){
         do{
             x = rand() % SO_HEIGHT; /* estrae un random tra 0 e (SO_HEIGHT-1) */
             y = rand() % SO_WIDTH; /* estrae un random tra 0 e (SO_WIDTH-1) */
-            if(map[x][y] == 1){ /* se la cella non è inaccessibile */
+            if(map[x][y] == 1){ /* se la cella non è inaccessibile né gia segnata come source*/
                 map[x][y] = 2; /* assegno la cella come SOURCE */
                 esito = 1;
                 /* dprintf(1, "\nContenuto di map[%d][%d]=%d", x, y, map[x][y]); */
@@ -461,7 +453,7 @@ void assign_source_cells(int SO_SOURCES){
 void print_map(int isTerminal){
     int i, k;
     double sec;
-    
+
     if(isTerminal){
         sec = (double)shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value/(double)1000000000;
         dprintf(1, "\nNumero totale di viaggi completati: %d", shd_mem_taxi_returned_values[0].completed_trips_counter); /* completed_trips_counter */
@@ -495,14 +487,14 @@ void print_map(int isTerminal){
             case 2:
                 if(isTerminal)
                     if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
-                        printf(BGGREEN KBLACK "|%d|" RESET,SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                        printf(BGGREEN KBLACK "|%d|" RESET, SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                     else
                         printf(BGGREEN KBLACK "|_|" RESET);
                 else
                     if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
-                        printf("|%d|",SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                        printf(BGGREEN KBLACK "|%d|" RESET, SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                     else
-                        printf("|_|");
+                        printf(BGGREEN KBLACK "|_|" RESET);
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
@@ -532,7 +524,7 @@ void source_processes_generator(){
                 switch(SO_SOURCES_PID[x][y] = fork()){
                     case -1:
                         /* errore nella fork */
-                        fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
+                        dprintf(1,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
                         exit(EXIT_FAILURE);
                         break;
                     
@@ -561,7 +553,7 @@ void source_processes_generator(){
                         execvp(SOURCE, source_args);
 
                         /* ERRORE ESECUZIONE DELLA EXECVP */
-                        fprintf(stderr, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+                        dprintf(1, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
 	                    exit(EXIT_FAILURE);
                         break;
                     
@@ -611,7 +603,7 @@ void taxi_processes_generator(int number, int aborted_pid){
         switch(SO_TAXIS_PID[k] = fork()){
             case -1:
                 /* errore nella fork */
-                fprintf(stderr,"\nFORK Error #%03d: %s\n", errno, strerror(errno));
+                dprintf(1, "\nFORK Error #%03d: %s\n", errno, strerror(errno));
                 exit(EXIT_FAILURE);
                 break;
             
@@ -649,7 +641,7 @@ void taxi_processes_generator(int number, int aborted_pid){
                 execvp(TAXI, taxi_args);
 
                 /* ERRORE ESECUZIONE DELLA EXECVP */
-                fprintf(stderr, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
+                dprintf(1, "\n%s: %d. EXECVP Error #%03d: %s\n", __FILE__, __LINE__, errno, strerror(errno));
                 exit(EXIT_FAILURE);
                 break;
             
@@ -680,22 +672,9 @@ param_list insert_exec_param_into_list(char name[], char value[]){
         new_elem->next = listaParametri;
         return new_elem;
     }else{
-        fprintf(stderr, "\n%s: %d. PARAMETRO DUPLICATO nel file di SETTING.\nNome del parametro doppio: %s\n", __FILE__, __LINE__, name);
+        dprintf(1, "\n%s: %d. PARAMETRO DUPLICATO nel file di SETTING.\nNome del parametro doppio: %s\n", __FILE__, __LINE__, name);
         exit(EXIT_FAILURE);
     }
-}
-
-void print_exec_param_list(){
-    /* stampa dei nodi contenuti nella lista */
-    param_list aus_param_list = listaParametri;
-	if (aus_param_list == NULL) {
-		printf("Empty EXECUTION PARAM LIST\n");
-		return;
-	}
-	for(; aus_param_list!=NULL; aus_param_list = aus_param_list->next) {
-		printf("\nNOME: %s ---- VALORE: %ld", aus_param_list->name, aus_param_list->value);
-	}
-	printf("\n");
 }
 
 long int search_4_exec_param(char nomeParam[]){
@@ -799,9 +778,6 @@ void free_mat(){
 
         currentPid_tPtr = SO_SOURCES_PID[i];
         free(currentPid_tPtr);
-
-        currentIntPtr = SO_TOP_CELLS_MAP[i];
-        free(currentIntPtr);
     }
     if(free_so_taxis_pid)
         free(SO_TAXIS_PID);
@@ -809,7 +785,6 @@ void free_mat(){
     free(SO_CAP);
     free(SO_TIMENSEC_MAP);
     free(SO_SOURCES_PID);
-    free(SO_TOP_CELLS_MAP);
 }
 
 void execution(){
@@ -897,7 +872,7 @@ void signal_handler(int sig){
     {
         case SIGALRM:
             seconds++;
-            printf("\n\n--------------------------------------\nSecondo: %d\n", seconds);
+            printf("\n\n\nSecondo: %d\n", seconds);
             print_map(0);
             if(seconds < SO_DURATION){
                 alarm(1);
@@ -1047,7 +1022,6 @@ void init_sem(){
     TEST_ERROR;
 
     sem_arg.val = 1;
-
     semctl(sem_sync_id, 0, SETVAL, sem_arg);
     TEST_ERROR;
 
@@ -1076,7 +1050,6 @@ void cleaner(){
     free_param_list(listaParametri);
     free_mat();
 
-    
     /* deallocazione memoria condivisa */
     if(shd_id_values_to_source)
         shmdt(shd_mem_values_to_source);
@@ -1120,7 +1093,7 @@ void get_top_cells(){
             map[(aus-7)/SO_WIDTH][(aus-7)%SO_WIDTH] = 3;
             aus = 0;
         }
-    }
+    }   
 
     free(top_cells_list);
 }
