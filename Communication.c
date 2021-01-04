@@ -1,4 +1,5 @@
 #include "Common.h"
+#include "Communication.h"
 
 void wait_for_syncronization(int my_sync_semaphore){
     int sem_status;

@@ -1,4 +1,6 @@
 #include "Common.h"
+#include "Communication.h"
+#include "Cleaner.h"
 
 #define EXIT_FAILURE_CUSTOM -1
 
@@ -18,7 +20,6 @@ void signal_actions(); /* gestione dei segnali */
 void signal_handler(int sig); /* handler custom sui segnali gestiti */
 void generate_request();  /* metodo di supporto che genera e inserisce la richiesta nella coda di messaggi, con gestione relativi semafori di mutua esclusione */
 int check_snd_msg_status(int errn); /* controlla l'esito di una message send */
-void free_mat(); /* libero lo spazio allocato per la matrice map locale */
 void check_map_to_allow_requests(); /* controlla che nella mappa esista almeno una cella non source e non inaccessibile (che possa quindi essere scelta da destinazione per le richieste) */
 
 int main(int argc, char *argv[]){
@@ -129,7 +130,7 @@ void signal_handler(int sig){
         case SIGQUIT:
             alarm(0); /* RESET DELL'ALARM. Cosi non si genererà più la richiesta che stava avanzando dalla chiamata all'ultimo alarm */
             /* RITORNO AL PADRE IL NUMERO DI RICHIESTE CHE HO ESEGUITO */
-            free_mat();
+            free_mat(2, map, NULL, NULL, NULL, 0, NULL, NULL);
             exit(requests); 
             break;
         case SIGINT:
@@ -211,16 +212,6 @@ void generate_request(){
     
     unlock_queue_semaphore(sem_sync_id);
     unlock_signals(all);
-}
-
-void free_mat(){
-    int i;
-    int *currentIntPtr;
-    /* free map 2d array */
-    for (i = 0; i < SO_HEIGHT; i++){
-        currentIntPtr = map[i];
-        free(currentIntPtr);
-    }
 }
 
 int check_snd_msg_status(int errn){

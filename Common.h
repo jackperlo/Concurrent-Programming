@@ -1,7 +1,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +23,8 @@
 #include <time.h>
 #include <sys/sem.h>
 
-#define SO_WIDTH 20
-#define SO_HEIGHT 20
+#define SO_WIDTH 30
+#define SO_HEIGHT 30
 
 /* colori di foreground e background */
 #define RESET "\x1B[0m"
@@ -51,6 +54,14 @@ int **map; /* puntatore a matrice che determina la mappa in esecuzione */
 						*/
 long int **SO_TIMENSEC_MAP; /* puntatore a matrice dei tempi di attesa per ogni cella */
 int **SO_TOP_CELLS_MAP; /* matrice che contiene per ogni cella il numero di volte in cui la cella è stata attraversata */
+
+/* funzioni e struttura dati per lettura e gestione parametri su file */
+typedef struct node {
+    char name[16];
+	long int value;
+	struct node *next;  
+} node;
+typedef node *param_list; /* conterrà la lista dei parametri passati tramite file di settings */
 
 /* struct per mappare la Map passata dalla shdmem in un array locale */
 typedef struct{
@@ -87,26 +98,5 @@ struct timespec timeout; /*sfruttata per il contatore alla rovescia "anti-deadlo
 					   getpid(),\
 					   errno,\
 					   strerror(errno));CLEAN;exit(-1);}
-
-/*attendo la sincronizzazione di tutti i figli*/
-void wait_for_syncronization(int);
-
-/*blocca i segnali specificati nella maschera*/
-void lock_signals(sigset_t);
-
-/*sblocca i segnali specificati nella maschera*/
-void unlock_signals(sigset_t);
-
-/*blocca il semaforo di mutua esclusione sulla lettura/scrittura coda di messaggi*/
-void lock_queue_semaphore(int);
-
-/*sblocca il semaforo di mutua esclusione sulla lettura/scrittura coda di messaggi*/
-void unlock_queue_semaphore(int);
-
-/*blocca il semaforo di mutua esclusione sulla lettura/scrittura nella shared memory*/
-void lock_taxi_return_shd_mem_semaphore(int);
-
-/*sblocca il semaforo di mutua esclusione sulla lettura/scrittura nella shared memory*/
-void unlock_taxi_return_shd_mem_semaphore(int);
 
 #endif

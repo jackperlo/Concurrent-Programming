@@ -1,5 +1,7 @@
 /*file d'intesazione comune ai 3 moduli: Master, Source, Taxi*/
 #include "Common.h"
+#include "Communication.h"
+#include "Cleaner.h"
 
 /* file eseguibili da cui i figli del master assorbiranno il codice */
 #define TAXI "./Taxi"
@@ -9,9 +11,13 @@
 #define NUM_PARAM 10
 /* define richiamata dalla macro TESTERROR definita in common*/
 #undef CLEAN
-#define CLEAN cleaner();
+#define CLEAN cleaner(listaParametri, shd_id_values_to_source, shd_mem_values_to_source, shd_id_values_to_taxi, shd_mem_values_to_taxi, msg_queue_id, sem_sync_id, sem_cells_id, map, SO_CAP, SO_SOURCES_PID, SO_TIMENSEC_MAP, free_so_taxis_pid, SO_TAXIS_PID);
 
 void init(); /* inizializzazione delle variabili */
+param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
+param_list insert_exec_param_into_list(char name[], char value[]); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
+long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro passatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
+int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
 void map_generator(); /* genera la matrice con annesse celle HOLES e celle SO_SOURCES */
 void forced_free_param_error(); /*free delle strutture dati forzata causa incorrettezza parametri d'esecuzione estratti*/
 void init_map(); /* inizializza la matrice vergine (tutte le celle a 1)*/
@@ -22,14 +28,11 @@ int check_cell_2be_inaccessible(int x, int y); /* metodo di supporto a map_gener
 void print_map(int isTerminal); /* stampa una vista della mappa durante l'esecuzione, e con isTerminal evidenzia le SO_TOP_CELLS celle con più frequenza di passaggio */
 void source_processes_generator(); /* fork dei processi sorgenti */
 void taxi_processes_generator(int number, int pid); /* fork di number processi taxi (utile perche richiamabile anche quando un taxi abortisce e va rigenerato un singolo processo, oltre che la generazione iniziale dei SO_TAXI) */
-void free_mat(); /* esegue la free di tutte le matrici allocate dinamicamente */
 void execution(); /* esecuzione temporizzata del programma con stampa delle matrici */
 void signal_actions(); /* imposta il signal handler */
-void print_map_specific(int** m, int isTerminal); /* stampa la mappa passata come parametro */
 void signal_handler(int sig); /* gestisce i segnali */
 void cpy_mem_values(int what_to_init); /* copia in shd mem i valori presenti in mem locale */
 void init_msg_queue(); /* metodo d'appoggio per inizializzare la coda di messaggi */
-void cleaner(); /* metodo per pulizia memoria da deallocare */
 void init_sem(); /* inizializza semafori */
 void kill_all_children(); /* elimina tutti i figli */
 int select_a_child_to_do_the_request(); /* seleziona il primo figlio che trova dalla matrice che contiene i pid dei figli e lo destina a alzare la richiesta effettuata via SIGUSR1 */
@@ -81,19 +84,6 @@ union semun sem_arg;
 int sem_sync_id = 0; 
 int sem_cells_id = 0; 
 
-/* funzioni e struttura dati per lettura e gestione parametri su file */
-typedef struct node {
-    char name[16];
-	long int value;
-	struct node *next;  
-} node;
-typedef node *param_list; /* conterrà la lista dei parametri passati tramite file di settings */
-param_list listaParametri = NULL; /* lista che contiente i parametri letti dal file di settings */
-param_list insert_exec_param_into_list(char name[], char value[]); /* inserisce i parametri d'esecuzione letti da settings in una lista concatenata */
-long int search_4_exec_param(char nomeParam[]); /* ricerca il parametro passatogli per nome nella lista dei parametri estratti dal file di settings. RITORNA 0 SE NON LO TROVA */
-void free_param_list(param_list aus_list); /* eseguo la free dello spazio allocato con la malloc durante il riempimento della lista dei parametri */
-int check_n_param_in_exec_list(); /* ritorna il numero di nodi(=parametri) presenti nella lista concatenata. Utile per controllare se ho esattamente gli N_PARAM richiesti */
-
 int main(int argc, char *argv[]){
     /* estraggo e assegno le variabili d'ambiente globali che definiranno le dimensioni della matrice di gioco */
     if((SO_WIDTH <= 0) || (SO_HEIGHT <= 0)){
@@ -112,7 +102,7 @@ int main(int argc, char *argv[]){
     execution();
     
     /* CONCLUSIONE DELL'ESECUZIONE */
-    cleaner();
+    cleaner(listaParametri, shd_id_values_to_source, shd_mem_values_to_source, shd_id_values_to_taxi, shd_mem_values_to_taxi, msg_queue_id, sem_sync_id, sem_cells_id, map, SO_CAP, SO_SOURCES_PID, SO_TIMENSEC_MAP, free_so_taxis_pid, SO_TAXIS_PID);
 
     return 0;
 }
@@ -317,7 +307,7 @@ void init(){
 }
 
 void forced_free_param_error(){
-    free_mat();
+    free_mat(0, map, SO_CAP, SO_SOURCES_PID, SO_TIMENSEC_MAP, free_so_taxis_pid, SO_TAXIS_PID, NULL);
     free_param_list(listaParametri);
     dprintf(1, KRED "");
 }
@@ -402,7 +392,7 @@ void assign_holes_cells(int SO_HOLES){
             tot = aus_tot; /*resetto il numero di celle considerabili (saranno uguali a SO_HEIGHT*SO_WIDTH)*/
         }else{
             aus_map_util(aus_map, 0); /*eseguo le free di tutta la mem allocata dinamicamente fin ora*/
-            free_mat();
+            free_mat(0, map, SO_CAP, SO_SOURCES_PID, SO_TIMENSEC_MAP, free_so_taxis_pid, SO_TAXIS_PID, NULL);
             free_param_list(listaParametri);
             /*TERMINO IL PROGRAMMA: NUMERO DI HOLES NON VALIDO!*/
             dprintf(1, KRED "\n\tNUMERO DI HOLES INVALIDO!\n\tPROVARE A DIMINUIRILI\n\t!ESECUZIONE TERMINATA!\n\n" RESET);
@@ -461,7 +451,7 @@ void print_map(int isTerminal){
         SO_TRIP_NOT_COMPLETED += buf.msg_qnum; /* messaggi di richiesta rimasti non considerati alla morte di tutti i figli: fanno parte dei viaggi inevasi */
         dprintf(1, "\nNumero totale di viaggi inevasi: %d", SO_TRIP_NOT_COMPLETED);
         dprintf(1, "\nNumero totale di viaggi abortiti: %d", SO_TRIP_ABORTED);
-        dprintf(1, "\nIl Taxi che ha percorso più strada (n celle): PID:%d ha attraversato %d celle", shd_mem_taxi_returned_values[5].pid, shd_mem_taxi_returned_values[2].total_n_cells_crossed_value); 
+        dprintf(1, "\nIl Taxi che ha percorso più strada (n celle): PID:%d ha attraversato (in totale) %d celle", shd_mem_taxi_returned_values[5].pid, shd_mem_taxi_returned_values[2].total_n_cells_crossed_value); 
         dprintf(1, "\nIl Taxi %d ha fatto il viaggio più lungo nel servire una richiesta:\n\t%dns\n\t~%fs", shd_mem_taxi_returned_values[4].pid, shd_mem_taxi_returned_values[1].max_timensec_complete_trip_value, sec);
         dprintf(1, "\nIl Taxi %d ha raccolto più richieste/clienti: %d\n", shd_mem_taxi_returned_values[6].pid, shd_mem_taxi_returned_values[3].max_trip_completed);  
         get_top_cells();
@@ -492,9 +482,9 @@ void print_map(int isTerminal){
                         printf(BGGREEN KBLACK "|_|" RESET);
                 else
                     if(SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL) > 0)
-                        printf(BGGREEN KBLACK "|%d|" RESET, SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
+                        printf("|%d|", SO_CAP[i][k] - semctl(sem_cells_id, (i*SO_WIDTH)+k ,GETVAL));
                     else
-                        printf(BGGREEN KBLACK "|_|" RESET);
+                        printf("|_|");
                 break;
             /* DEFAULT: errore o TOP_CELL se stiamo stampando l'ultima mappa, quadratino doppio */
             default:
@@ -749,44 +739,6 @@ int check_cell_2be_inaccessible(int x, int y){
     return esito;
 }
 
-void free_param_list(param_list aus_list){
-    /* eseguo la free dello spazio allocato per i nodi della lista */
-	if (aus_list == NULL) {
-		return;
-	}
-    
-	free_param_list(aus_list->next);
-    free(aus_list);
-}
-
-void free_mat(){
-    int i;
-    int *currentIntPtr;
-    long int *currentLongPtr;
-    pid_t *currentPid_tPtr;
-    
-    /* free map 2d array */
-    for (i = 0; i < SO_HEIGHT; i++){
-        currentIntPtr = map[i];
-        free(currentIntPtr);
-
-        currentIntPtr = SO_CAP[i];
-        free(currentIntPtr);
-
-        currentLongPtr = SO_TIMENSEC_MAP[i];
-        free(currentLongPtr);
-
-        currentPid_tPtr = SO_SOURCES_PID[i];
-        free(currentPid_tPtr);
-    }
-    if(free_so_taxis_pid)
-        free(SO_TAXIS_PID);
-    free(map);
-    free(SO_CAP);
-    free(SO_TIMENSEC_MAP);
-    free(SO_SOURCES_PID);
-}
-
 void execution(){
     int status, pid;
 
@@ -929,21 +881,6 @@ void kill_all_children(){
     }
 }
 
-void print_map_specific(int** m, int isTerminal){
-    /* indici per ciclare */
-    int i, k;
-    /*printf("value = %p",(void *) &m);*/
-    printf("Specifica map:\n");
-    /* cicla per tutti gli elementi della mappa */
-    for(i = 0; i < SO_HEIGHT; i++){
-        for(k = 0; k < SO_WIDTH; k++){
-            printf("|%d", m[i][k]);
-        }
-        /* nuova linea dopo aver finito di stampare le celle della linea i della matrice */
-        printf("|\n");
-    }
-}
-
 void init_shd_mem(int dim, int what_to_init){ 
     if(what_to_init == VALUES_TO_SOURCE){
         /*INIZIALIZZO LA SHARED MEMORY PER I SOURCE */
@@ -1042,33 +979,6 @@ void init_sem(){
         semctl(sem_cells_id, i, SETVAL, sem_arg);
         TEST_ERROR;
     } 
-}
-
-void cleaner(){
-    int i;
-    /* deallocazione malloc matrici */
-    free_param_list(listaParametri);
-    free_mat();
-
-    /* deallocazione memoria condivisa */
-    if(shd_id_values_to_source)
-        shmdt(shd_mem_values_to_source);
-    if(shd_id_values_to_taxi)
-        shmdt(shd_mem_values_to_taxi);
-
-    /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
-    msgctl(msg_queue_id, IPC_RMID, NULL);
-
-    if(sem_sync_id){
-        semctl(sem_sync_id, 0, IPC_RMID);
-        semctl(sem_sync_id, 1, IPC_RMID);
-        semctl(sem_sync_id, 2, IPC_RMID);
-    }
-
-    if(sem_cells_id)
-        for(i=0;i<SO_HEIGHT*SO_WIDTH;i++){
-            semctl(sem_cells_id, i, IPC_RMID);
-        } 
 }
 
 void get_top_cells(){

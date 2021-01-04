@@ -1,4 +1,6 @@
 #include "Common.h"
+#include "Communication.h"
+#include "Cleaner.h"
 
 #define EXIT_FAILURE_CUSTOM -1
 
@@ -19,7 +21,6 @@ void struct_to_maps(); /* converte la struttura che contiene i valori delle mapp
 void init_maps(); /* inizializza le mappa locali ai taxi e i parametri da ritornare */ 
 void signal_actions(); /* gestione dei segnali */ 
 void signal_handler(int sig); /* handlers custom sui segnali gestiti*/
-void free_mat(); /* free dello spazio allocato con la malloc per le tre matrici locali */
 void route_travel(int isToSource); /* gestisce il viaggio dei taxi e gestione dei suoi parametri */
 int get_trip(); /* gestione della presa in carico di una richiesta */
 int check_rcv_msg_status(int errn); /* check dell'avvenuta lettura da coda di messaggi */
@@ -45,11 +46,7 @@ int main(int argc, char *argv[]){
     wait_for_syncronization(sem_sync_id);
 
     while (1)
-    {
         search_for_a_trip = get_trip();
-        if(!search_for_a_trip)
-            sleep(1);
-    }
 
     return(-1);
 }
@@ -110,7 +107,7 @@ void signal_handler(int sig){
         /* Termine Esecuzione del Taxi */
         case SIGQUIT:
             return_values();
-            free_mat();
+            free_mat(1, map, NULL, NULL, SO_TIMENSEC_MAP, 0, NULL, aus_shd_mem_taxi_returned_values);
             if(trip_active)
                 exit(TAXI_NOT_COMPLETED_STATUS); 
             else
@@ -168,21 +165,6 @@ void struct_to_maps(){
             cnt++;
         }
     }
-}
-
-void free_mat(){
-    int i;
-    int *currentIntPtr;
-    long int *currentLongPtr;
-    /* free map 2d array */
-    for (i = 0; i < SO_HEIGHT; i++){
-        currentIntPtr = map[i];
-        free(currentIntPtr);
-
-        currentLongPtr = SO_TIMENSEC_MAP[i];
-        free(currentLongPtr);
-    }
-    free(aus_shd_mem_taxi_returned_values);
 }
 
 int check_for_a_message_in_this_coordinates(int i, int j){
@@ -280,7 +262,7 @@ int get_trip(){
 }
 
 void route_travel(int isToSource){
-    int action, time_tot_trip=0, not_permitted_action=-1, deadlock_res=-1, myrand;
+    int action, time_tot_trip=0, not_permitted_action=-1, deadlock_res=-1, myrand=-1;
     struct timespec timer;
     
     timer.tv_sec = 0;
@@ -290,19 +272,18 @@ void route_travel(int isToSource){
 
     while(trip_active){
         s_cells_buff[0].sem_num = (x*SO_WIDTH)+y;
-        
+
         if(x < toX){ /*prossima cella => basso */
 
             if((map[x+1][y] != 0) && (not_permitted_action != 0))
                 action = 0;                 
-            else{
-                srand(time(NULL));
-                myrand=rand() % 100000;
-                
-                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand <= 50000))
+            else{                
+                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand == 1))
                     action = 2; 
                 else if(((y-1)>=0) && (map[x][y-1] != 0) && (not_permitted_action != 3))
                     action = 3; 
+                
+                myrand*=-1;
             }
 
         }else if(x > toX){ /*prossima cella => alto */
@@ -310,13 +291,12 @@ void route_travel(int isToSource){
             if((map[x-1][y] != 0) && (not_permitted_action != 1))
                 action = 1;
             else {
-                srand(time(NULL));
-                myrand=rand() % 100000;
-
-                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand >= 50000))
+                if(((y+1)<SO_WIDTH) && (map[x][y+1] != 0) && (not_permitted_action != 2) && (myrand == -1))
                     action = 2; 
                 else if(((y-1)>=0) && (map[x][y-1] != 0) && (not_permitted_action != 3))
                     action = 3;     
+
+                myrand*=-1;  
             }
 
         }else if(y < toY){ /*prossima cella => destra */
@@ -324,13 +304,12 @@ void route_travel(int isToSource){
             if((map[x][y+1] != 0) && (not_permitted_action != 2))
                 action = 2;
             else {
-                srand(time(NULL));
-                myrand=rand() % 100000;
-
-                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand <= 50000))
+                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand == -1))
                     action = 0; 
                 else if(((x-1)>=0) && (map[x-1][y] != 0) && (not_permitted_action != 1))
                     action = 1;  
+
+                myrand*=-1;
             }
 
         }else if(y > toY){ /*prossima cella => sinistra */
@@ -338,13 +317,12 @@ void route_travel(int isToSource){
             if((map[x][y-1] != 0) && (not_permitted_action != 3))
                 action = 3;
             else {
-                srand(time(NULL));
-                myrand=rand() % 100000;
-
-                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand >= 50000))
+                if(((x+1)<SO_HEIGHT) && (map[x+1][y] != 0) && (not_permitted_action != 0) && (myrand == 1))
                     action = 0; 
                 else if(((x-1)>=0) && (map[x-1][y] != 0) && (not_permitted_action != 1))
                     action = 1;  
+
+                myrand*=-1;
             }
         }else if(y==toY && x==toX){
             trip_active=0;
@@ -378,7 +356,7 @@ void route_travel(int isToSource){
                     s_cells_buff[0].sem_num = (x*SO_WIDTH)+y; s_cells_buff[0].sem_op = 1;
                     while(semop(sem_cells_id, s_cells_buff, 1) == -1 && errno == EINTR);
                     return_values();
-                    free_mat();
+                    free_mat(1, map, NULL, NULL, SO_TIMENSEC_MAP, 0, NULL, aus_shd_mem_taxi_returned_values);
                     exit(TAXI_ABORTED_STATUS);
                 }else{/* reverses operation */
                     switch (action){

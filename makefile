@@ -1,10 +1,10 @@
 CC=gcc
-COMPILATION_FLAGS= -std=c89 -pedantic -Wall -Werror -D_GNU_SOURCE 
-DEPENDENCIES = Common.h 
+COMPILATION_FLAGS= -std=c89 -pedantic -Wall -Werror
+DEPENDENCIES = Common.h Communication.h Cleaner.h
 
-OBJTAXI = Taxi.o Common.o
-OBJSOURCE = Source.o Common.o
-OBJMASTER = Master.o Common.o
+OBJTAXI = Taxi.o Communication.o Cleaner.o 
+OBJSOURCE = Source.o Communication.o Cleaner.o
+OBJMASTER = Master.o Communication.o Cleaner.o
 
 %.o: %.c $(DEPENDENCIES)
 	$(CC) -c -o $@ $< $(CFLAGS)
