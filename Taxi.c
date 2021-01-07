@@ -13,7 +13,7 @@ taxi_returned_values *aus_shd_mem_taxi_returned_values; /* struct locale utile p
 taxi_returned_values *shd_mem_taxi_returned_values; /* shd mem dove aggiornerò i valori da ritornare una volta morto */
 int trip_active=0; /*se c'è un viaggio in corso */
 struct msgbuf msg_buffer; /* struttura del buffer della coda di messaggi */
-int sem_sync_id = 0; /*id semaforo mutua esclusione per coda di messaggi, shd mem, sincronizzazione*/
+int sem_sync_id = -1; /*id semaforo mutua esclusione per coda di messaggi, shd mem, sincronizzazione*/
 int sem_cells_id = 0;  /*id semaforo contatore per capacita di ogni cella*/
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */

@@ -81,7 +81,7 @@ union semun {
     struct seminfo  *__buf;  /* Buffer for IPC_INFO*/
 };
 union semun sem_arg;
-int sem_sync_id = 0; 
+int sem_sync_id = -1; 
 int sem_cells_id = 0; 
 
 int main(int argc, char *argv[]){

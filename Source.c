@@ -11,7 +11,7 @@ int msg_queue_id = 0; /* id del semaforo per la coda di messaggi */
 sigset_t masked, all; /* maschere per i segnali */ 
 values_to_source *shd_map; /* matrice sottoforma di array di stuct che contiene il solo valore della cella, allocata in shd mem e passata dal master */
 struct msgbuf msg_buffer; /*contenitore messaggi presenti in coda di messagi*/
-int sem_sync_id = 0; /*id semaforo per mutua esclusione su coda di messaggi*/
+int sem_sync_id = -1; /*id semaforo per mutua esclusione su coda di messaggi*/
 
 void init(int argc, char *argv[]); /* funzione di inizializzazione per le variabili globali al processo source e la mappa */
 void struct_to_map(); /* converte la struttura che contiene i valori della mappa condivisa passata dalla shd mem in una mappa locale (int **map) */

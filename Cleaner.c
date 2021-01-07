@@ -26,7 +26,7 @@ void cleaner(param_list listaParametri, int shd_id_values_to_source, values_to_s
     /* dealloco la coda di messaggi e ottengo i messaggi rimasti non letti nella coda */
     msgctl(msg_queue_id, IPC_RMID, NULL);
 
-    if(sem_sync_id){
+    if(sem_sync_id != -1){
         semctl(sem_sync_id, 0, IPC_RMID);
         semctl(sem_sync_id, 1, IPC_RMID);
         semctl(sem_sync_id, 2, IPC_RMID);
