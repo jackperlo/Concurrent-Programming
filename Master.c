@@ -837,11 +837,13 @@ void signal_handler(int sig){
             alarm(0);
             break;
         /* richiesta esplicita da terminale, fatta dall'utente. Handler associato solo dopo che tutti i processi sono sincronizzati */
+        /* se si vuol mandare la richiesta direttamente al figlio <kill -SIGUSR PIDFIGLIO>. 
+        Per vedere i PID dei figli ps -axjf | grep <PIDMASTER>*/
         case SIGUSR1:
             if((child_who_does_user_request = select_a_child_to_do_the_request())==-1)
                 dprintf(1, "\nErrore sul SIGUSR1: nessun processo figlio ha preso in carico la richiesta. Riprova");
             else{
-                dprintf(1, "\nHO SCELTO IL FIGLIO CON PID:%d\n",child_who_does_user_request);
+                dprintf(1, "\nMaster.c: HO SCELTO IL FIGLIO CON PID : %d", child_who_does_user_request);
                 kill(child_who_does_user_request, SIGUSR1);
                 TEST_ERROR;
             }

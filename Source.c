@@ -140,7 +140,7 @@ void signal_handler(int sig){
         case SIGUSR1:
             requests++;
             generate_request();
-            /*dprintf(1,"\nAGGIUNGO LA RICHIESTA ESPLICITA DA TERMINALE IN CODA! Sono : %d", getpid());*/
+            dprintf(1,"\nSource.c: AGGIUNGO LA RICHIESTA ESPLICITA DA TERMINALE IN CODA! Sono : %d", getpid());
             break;
 
         default:

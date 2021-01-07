@@ -23,8 +23,8 @@
 #include <time.h>
 #include <sys/sem.h>
 
-#define SO_WIDTH 30
-#define SO_HEIGHT 30
+#define SO_WIDTH 60
+#define SO_HEIGHT 20
 
 /* colori di foreground e background */
 #define RESET "\x1B[0m"
