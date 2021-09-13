@@ -43,6 +43,6 @@ Hope you enjoy this,<br/>
 Jack & Ale
 
 ## Contact
-Giacomo Perlo: [Linkedin](https://www.linkedin.com/in/giacomo-perlo-1a81471b6/), <perlogiacomo@gmail.com><br/>
+Giacomo Perlo: [Linkedin](https://www.linkedin.com/in/giacomo-perlo/), <perlogiacomo@gmail.com><br/>
 Alessio Mana: [Linkedin](https://www.linkedin.com/in/alessio-mana-051112175/), <alessioma20@gmail.com><br/> 
 If you need help or want to know something more about all of this, we are ready and excited to help you!
