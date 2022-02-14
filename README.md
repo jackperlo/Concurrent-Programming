@@ -32,7 +32,7 @@ The game use some parameteres:
 - *Execution Parameters*: these are specified in the ***Settings*** file and will affect the result of the game. <br/>
   **If you modify them you don't have to recompile the application.** (Just write "make run" in the shell).
 - *Compilation Parameters*: these are specified in the ***Common.h*** file (row: 26, 27) and affect the size of the map (height and width). <br/>
-  **If you modify them you have to recompile the application.** (first you write "make all" and then, one compiled, "make run").
+  **If you modify them you have to recompile the application.** (first you write "make all" and then, once compiled, "make run").
 
 
 ## For the most curious
